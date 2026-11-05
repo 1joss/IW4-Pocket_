@@ -1,0 +1,220 @@
+--- a/crates/bots/src/nav.rs
++++ b/crates/bots/src/nav.rs
+@@ -794,35 +794,109 @@
+     best.map(|(id, _)| id)
+ }
+ 
++/// Directed reachability matters: the baked weak components deliberately ignore
++/// edge direction, so a one-way drop may put a goal in the same component even
++/// though it is impossible to reach from the bot's current floor.
++pub fn reachable_mask(graph: &NavGraph, start: u16) -> Vec<bool> {
++    let mut seen = vec![false; graph.nodes.len()];
++    if start as usize >= seen.len() { return seen; }
++    let mut queue = std::collections::VecDeque::new();
++    seen[start as usize] = true;
++    queue.push_back(start);
++    while let Some(id) = queue.pop_front() {
++        for edge in &graph.adj[id as usize] {
++            if !seen[edge.to as usize] {
++                seen[edge.to as usize] = true;
++                queue.push_back(edge.to);
++            }
++        }
++    }
++    seen
++}
++
++/// A deterministic, spatially distributed roam target chosen only from nodes
++/// that are actually reachable following directed links. The caller supplies a
++/// salt to vary the target without introducing nondeterministic simulation RNG.
+ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
+     let start = nearest_within(graph, from, SNAP_IN)?;
+-    let comp = graph.component[start as usize];
++    let reachable = reachable_mask(graph, start);
+     let mut best: Option<(u32, [f32; 3])> = None;
+-    let mut fallback = None;
++    let mut fallback: Option<(f32, [f32; 3])> = None;
+     for (i, pos) in graph.nodes.iter().enumerate() {
+-        if graph.component[i] != comp {
+-            continue;
+-        }
++        if !reachable[i] { continue; }
+         let planar = dist_xy(*pos, from);
+-        if planar > 8.0 && fallback.is_none() {
+-            fallback = Some(*pos);
+-        }
+-        if !(128.0..=1024.0).contains(&planar) {
+-            continue;
+-        }
++        if planar > 96.0 && fallback.is_none_or(|(d, _)| planar > d) {
++            fallback = Some((planar, *pos));
++        }
++        // A minimum distance prevents endless shuffling around spawn.
++        if !(320.0..=1400.0).contains(&planar) { continue; }
+         let mut h = (i as u32).wrapping_add(salt.wrapping_mul(0x9E37_79B1));
+         h = (h ^ (h >> 16)).wrapping_mul(0x85eb_ca6b);
+         h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
+         h ^= h >> 16;
+-        // Preserve per-bot variety while discouraging the shortest patrols.
+-        // The upper bits of the hash remain the primary selection criterion;
+-        // a modest distance bonus breaks ties in favour of wider patrols.
+-        let score = (h >> 4).saturating_add((planar as u32).saturating_mul(4096));
+-        if best.is_none_or(|(best_h, _)| score >= best_h) {
+-            best = Some((score, *pos));
+-        }
+-    }
+-    best.map(|(_, pos)| pos).or(fallback)
++        if best.is_none_or(|(best_h, _)| h >= best_h) {
++            best = Some((h, *pos));
++        }
++    }
++    best.map(|(_, pos)| pos).or_else(|| fallback.map(|(_, pos)| pos))
++}
++
++/// Compact, allocation-bounded audit for comparing navigation graphs across maps.
++/// Weak components are useful for coverage, but directed reachability is the
++/// authoritative test for spawn exits and one-way drops.
++#[derive(Clone, Debug)]
++pub struct NavAudit {
++    pub nodes: usize,
++    pub edges: usize,
++    pub walk_edges: usize,
++    pub drop_edges: usize,
++    pub glass_edges: usize,
++    pub isolated: usize,
++    pub weak_components: usize,
++    pub largest_component: usize,
++}
++
++pub fn audit(graph: &NavGraph) -> NavAudit {
++    let mut sizes = BTreeMap::<u16, usize>::new();
++    for id in &graph.component { *sizes.entry(*id).or_default() += 1; }
++    let mut out = NavAudit {
++        nodes: graph.nodes.len(), edges: 0, walk_edges: 0,
++        drop_edges: 0, glass_edges: 0, isolated: 0,
++        weak_components: sizes.len(),
++        largest_component: sizes.values().copied().max().unwrap_or(0),
++    };
++    for edges in &graph.adj {
++        out.edges += edges.len();
++        if edges.is_empty() { out.isolated += 1; }
++        for edge in edges {
++            match edge.kind {
++                TraversalKind::Walk => out.walk_edges += 1,
++                TraversalKind::Drop => out.drop_edges += 1,
++                TraversalKind::BreakGlass => out.glass_edges += 1,
++            }
++        }
++    }
++    out
++}
++
++/// Opt-in raw graph export for offline inspection. A caller-provided directory
++/// avoids assumptions about iOS sandbox paths; no file is written by default.
++pub fn export_audit_csv(graph: &NavGraph, directory: &std::path::Path) -> std::io::Result<()> {
++    use std::io::Write;
++    std::fs::create_dir_all(directory)?;
++    let mut nodes = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-nodes.csv"))?);
++    writeln!(nodes, "id,x,y,z,weak_component,out_degree")?;
++    for (i, p) in graph.nodes.iter().enumerate() {
++        writeln!(nodes, "{i},{},{},{},{},{}", p[0], p[1], p[2], graph.component[i], graph.adj[i].len())?;
++    }
++    let mut edges = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-edges.csv"))?);
++    writeln!(edges, "from,to,kind,cost")?;
++    for (i, row) in graph.adj.iter().enumerate() {
++        for e in row {
++            writeln!(edges, "{i},{},{:?},{}", e.to, e.kind, e.cost)?;
++        }
++    }
++    Ok(())
+ }
+ 
+ /// Baked supports that could serve as firing positions against a threat at
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -63,6 +63,7 @@
+     nav_key: Option<(u64, u64, u32, u32)>,
+     roam: Option<[f32; 3]>,
+     roam_gen: u32,
++    recent_roams: Vec<[f32; 3]>,
+     failed_goals: Vec<([f32; 3], u32)>,
+     route_blocked_since: Option<u32>,
+     fight_hold_since: Option<u32>,
+@@ -102,6 +103,7 @@
+             nav_key: None,
+             roam: None,
+             roam_gen: 0,
++            recent_roams: Vec::new(),
+             failed_goals: Vec::new(),
+             route_blocked_since: None,
+             fight_hold_since: None,
+@@ -210,6 +212,16 @@
+             self.cancel_navigation();
+             self.weapon.reset();
+             self.roam = None;
++            self.recent_roams.clear();
++            if let Some(graph) = nav.filter(|g| !g.is_empty()) {
++                if let Some(start) = nav::nearest_within(graph, obs.self_state.origin, nav::SNAP_IN) {
++                    let reachable = nav::reachable_mask(graph, start);
++                    let count = reachable.iter().filter(|&&yes| yes).count();
++                    diag::info!(Sim, "bots: nav_spawn id={} node={} reachable={}/{} origin=({:.0},{:.0},{:.0})", obs.self_state.id.0, start, count, graph.nodes.len(), obs.self_state.origin[0], obs.self_state.origin[1], obs.self_state.origin[2]);
++                } else {
++                    diag::warn!(Sim, "bots: nav_spawn id={} no_start_support", obs.self_state.id.0);
++                }
++            }
+             self.failed_goals.clear();
+             self.fight_hold_since = None;
+             self.memory = Memory::default();
+@@ -657,6 +669,15 @@
+                 None
+             };
+             scores[4] = objective_utility(obs, obj, route_length);
++            // Stable per-bot tactical roles: one quarter patrols/intercepts
++            // instead of piling onto a capture or defensive point. Never
++            // suppress urgent defuse/plant actions or active interactions.
++            if obs.self_state.id.0 % 4 == 0
++                && matches!(obj.action, ObjectiveAction::Capture | ObjectiveAction::Defend)
++                && !obj.touching
++            {
++                scores[4] -= 55.0;
++            }
+         }
+         let kinds = [
+             TaskKind::Hunt,
+@@ -804,6 +825,20 @@
+                 obs.self_state.origin[2],
+             ])
+         };
++        // Remember recently selected destinations so the same spawn corner
++        // is not picked repeatedly when a bot finishes or abandons a route.
++        let next = next.filter(|candidate| {
++            !self.recent_roams.iter().any(|old| dist2(*old, *candidate) < 240.0 * 240.0)
++        }).or_else(|| {
++            nav.and_then(|graph| {
++                (4..8u32).filter_map(|n| nav::roam_node(graph, obs.self_state.origin, salt.wrapping_add(n.wrapping_mul(0x9E37_79B1))))
++                    .find(|candidate| !self.recent_roams.iter().any(|old| dist2(*old, *candidate) < 240.0 * 240.0))
++            })
++        }).or(next);
++        if let Some(candidate) = next {
++            self.recent_roams.push(candidate);
++            if self.recent_roams.len() > 8 { self.recent_roams.remove(0); }
++        }
+         self.roam = next;
+         next
+     }
+--- a/crates/bots/src/plugin.rs
++++ b/crates/bots/src/plugin.rs
+@@ -704,6 +704,13 @@
+     {
+         if let Some(graph) = future::block_on(future::poll_once(task)) {
+             nav.graph = graph;
++            let a = nav::audit(&nav.graph);
++            diag::info!(Sim, "bots: nav_audit nodes={} edges={} walk={} drops={} glass={} isolated={} weak_components={} largest_component={} truncated={}", a.nodes, a.edges, a.walk_edges, a.drop_edges, a.glass_edges, a.isolated, a.weak_components, a.largest_component, nav.graph.truncated);
++            if let Ok(dir) = std::env::var("IW4_NAV_AUDIT_DIR") {
++                if let Err(error) = nav::export_audit_csv(&nav.graph, std::path::Path::new(&dir)) {
++                    diag::warn!(Sim, "bots: nav_audit export failed: {error}");
++                }
++            }
+             // The bake is only navigation once this graph is the one the bots
+             // will read, which is here and not on the worker.
+             if let Some(stage) = stage.take() {
