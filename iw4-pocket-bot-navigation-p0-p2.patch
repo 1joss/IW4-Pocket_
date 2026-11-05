@@ -1,0 +1,214 @@
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -35,6 +35,9 @@
+ const FIGHT_COMMIT_MAX_AGE_TICKS: u32 = 60;
+ /// Commanded movement without displacement for this long is a stuck bot.
+ const STUCK_TICKS: u32 = 40;
++const ROUTE_RETRY_TICKS: u32 = 24;
++const FIGHT_REPOSITION_TICKS: u32 = 100;
++const FAILED_GOAL_RADIUS: f32 = 72.0;
+ const GOAL_RESERVATION_RADIUS: f32 = 96.0;
+ const GOAL_RESERVATION_PENALTY: f32 = 24.0;
+ 
+@@ -60,6 +63,9 @@
+     nav_key: Option<(u64, u64, u32, u32)>,
+     roam: Option<[f32; 3]>,
+     roam_gen: u32,
++    failed_goals: Vec<([f32; 3], u32)>,
++    route_blocked_since: Option<u32>,
++    fight_hold_since: Option<u32>,
+     decision: Decision,
+     prev_seen: Vec<ClientId>,
+     was_touching: bool,
+@@ -96,6 +102,9 @@
+             nav_key: None,
+             roam: None,
+             roam_gen: 0,
++            failed_goals: Vec::new(),
++            route_blocked_since: None,
++            fight_hold_since: None,
+             decision: Decision::default(),
+             prev_seen: Vec::new(),
+             was_touching: false,
+@@ -115,6 +124,7 @@
+         self.fight_scan = None;
+         self.committed.clear();
+         self.route_goal = None;
++        self.route_blocked_since = None;
+     }
+ 
+     pub fn decision(&self) -> Decision {
+@@ -200,6 +210,8 @@
+             self.cancel_navigation();
+             self.weapon.reset();
+             self.roam = None;
++            self.failed_goals.clear();
++            self.fight_hold_since = None;
+             self.memory = Memory::default();
+             self.prev_seen.clear();
+             self.was_touching = false;
+@@ -708,8 +720,10 @@
+             path,
+             PathOutcome::Blocked | PathOutcome::Unreachable | PathOutcome::IncompleteGraph
+         ) {
++            self.remember_failed_goal(goal, obs.tick);
+             self.roam = None;
+             self.committed.clear();
++            self.route_goal = None;
+         }
+         BotIntent {
+             look_at: Some([goal[0], goal[1], obs.eye()[2]]),
+@@ -732,6 +746,7 @@
+         }
+         self.roam_gen = self.roam_gen.saturating_add(1);
+         let salt = obs.self_state.id.0 ^ self.roam_gen;
++        self.failed_goals.retain(|(_, until)| *until > obs.tick);
+         let next = if let Some(graph) = nav.filter(|graph| !graph.is_empty()) {
+             let mut best = None;
+             for attempt in 0..4u32 {
+@@ -742,6 +757,11 @@
+                 ) else {
+                     break;
+                 };
++                if self.failed_goals.iter().any(|(bad, _)|
++                    dist_xy(*bad, candidate) < FAILED_GOAL_RADIUS
++                ) {
++                    continue;
++                }
+                 let penalty = reservation_penalty(obs.self_state.id, candidate, &self.reservations);
+                 if penalty == 0.0 {
+                     best = Some(candidate);
+@@ -966,11 +986,19 @@
+         let target_id = contact.id;
+         world.enter(QuerySubsystem::Tactical);
+         if shot.is_err() {
+-            return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(here));
++            return self.pending_movement(here);
+         }
+         // Already in range with a line of fire: this is the position.
+         if in_hold && shot_allowed(shot, target_id) {
+-            return (MoveMode::Hold, PathOutcome::Clear, Some(here));
++            let since = *self.fight_hold_since.get_or_insert(obs.tick);
++            if obs.tick.saturating_sub(since) < FIGHT_REPOSITION_TICKS {
++                return (MoveMode::Hold, PathOutcome::Clear, Some(here));
++            }
++            // Re-evaluate supports periodically, but don't force a blind move.
++            self.fight_hold_since = Some(obs.tick);
++            self.fight_scan = None;
++        } else {
++            self.fight_hold_since = None;
+         }
+         let hold = self.hold_range(obs);
+         // The engagement, not the two exact coordinates: a threat that shifts a
+@@ -1078,7 +1106,10 @@
+             // caller resume another goal when every firing position failed; out
+             // of range, close on the engagement's anchor — a destination that
+             // does not move with every observation and invalidate its own search.
+-            if in_hold || denied {
++            if denied {
++                return self.pending_movement(here);
++            }
++            if in_hold {
+                 return (MoveMode::Hold, path, Some(here));
+             }
+             return self.route(here, anchor, world, nav, astar_budget);
+@@ -1210,6 +1241,26 @@
+         }
+     }
+ 
++    fn remember_failed_goal(&mut self, goal: [f32; 3], tick: u32) {
++        self.failed_goals.retain(|(_, until)| *until > tick);
++        self.failed_goals.push((goal, tick.saturating_add(240)));
++        if self.failed_goals.len() > 12 {
++            self.failed_goals.remove(0);
++        }
++    }
++
++    // Query-budget denial isn't evidence of a wall. Retain only an existing
++    // clear, walking waypoint; never infer that an unvalidated step is safe.
++    fn pending_movement(&self, here: [f32; 3]) -> (MoveMode, PathOutcome, Option<[f32; 3]>) {
++        if self.intent.path == PathOutcome::Clear
++            && matches!(self.intent.move_mode, MoveMode::Walk | MoveMode::Drop)
++            && self.intent.move_goal.is_some_and(|goal| dist2(here, goal) > WAYPOINT_IN * WAYPOINT_IN)
++        {
++            return (self.intent.move_mode, PathOutcome::Clear, self.intent.move_goal);
++        }
++        (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(here))
++    }
++
+     fn route(
+         &mut self,
+         from: [f32; 3],
+@@ -1255,7 +1306,10 @@
+                     return (MoveMode::Hold, PathOutcome::IncompleteGraph, Some(to));
+                 }
+                 Err(PathError::BudgetExhausted { .. }) => {
+-                    return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(to));
++                    if self.committed.is_empty() || self.route_goal.is_none_or(|goal| dist2(goal, to) > WAYPOINT_IN * WAYPOINT_IN) {
++                        return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(to));
++                    }
++                    // Existing route has the same goal; keep executing its verified steps.
+                 }
+                 Err(
+                     PathError::GraphChanged
+@@ -1302,7 +1356,9 @@
+             world.walk_hull(from, step.position)
+         };
+         match sample {
+-            Ok(WalkSample::Clear) => (
++            Ok(WalkSample::Clear) => {
++                self.route_blocked_since = None;
++                (
+                 if step.kind == nav::TraversalKind::Drop {
+                     MoveMode::Drop
+                 } else {
+@@ -1310,18 +1366,25 @@
+                 },
+                 PathOutcome::Clear,
+                 Some(step.position),
+-            ),
++                )
++            },
+             Ok(WalkSample::BreakGlass) => (
+                 MoveMode::BreakGlass,
+                 PathOutcome::Clear,
+                 Some(step.position),
+             ),
+-            Ok(WalkSample::Blocked) => (MoveMode::Hold, PathOutcome::Blocked, Some(step.position)),
+-            Err(_) => (
+-                MoveMode::Hold,
+-                PathOutcome::BudgetExhausted,
+-                Some(step.position),
+-            ),
++            Ok(WalkSample::Blocked) => {
++                let attempts = self.route_blocked_since.get_or_insert(0);
++                *attempts = attempts.saturating_add(1);
++                if *attempts >= ROUTE_RETRY_TICKS / THINK_PERIOD_TICKS {
++                    self.committed.clear();
++                    self.route_goal = None;
++                    self.route_work.cancel();
++                    self.route_blocked_since = None;
++                }
++                (MoveMode::Hold, PathOutcome::Blocked, Some(step.position))
++            }
++            Err(_) => (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(step.position)),
+         }
+     }
+ }
+--- a/crates/bots/src/nav.rs
++++ b/crates/bots/src/nav.rs
+@@ -803,8 +803,12 @@
+         h = (h ^ (h >> 16)).wrapping_mul(0x85eb_ca6b);
+         h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
+         h ^= h >> 16;
+-        if best.is_none_or(|(best_h, _)| h >= best_h) {
+-            best = Some((h, *pos));
++        // Preserve per-bot variety while discouraging the shortest patrols.
++        // The upper bits of the hash remain the primary selection criterion;
++        // a modest distance bonus breaks ties in favour of wider patrols.
++        let score = (h >> 4).saturating_add((planar as u32).saturating_mul(4096));
++        if best.is_none_or(|(best_h, _)| score >= best_h) {
++            best = Some((score, *pos));
+         }
+     }
+     best.map(|(_, pos)| pos).or(fallback)
