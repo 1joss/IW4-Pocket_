@@ -1,0 +1,160 @@
+--- a/crates/bots/src/intent.rs
++++ b/crates/bots/src/intent.rs
+@@ -13,6 +13,8 @@
+ pub enum MoveMode {
+     Hold,
+     Walk,
++    /// A short obstacle-assisted jump or mantle attempt, not a graph shortcut.
++    Jump,
+     Drop,
+     BreakGlass,
+     Mantle,
+--- a/crates/bots/src/motor.rs
++++ b/crates/bots/src/motor.rs
+@@ -46,9 +46,8 @@
+     }
++
+     pub fn report(&self, obs: &BotObservation, intent: &BotIntent, cmd: &UserCmd) -> MotorReport {
+-        if matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder) {
+-            return MotorReport::Unsupported;
+-        }
++        // The simulator implements ladder and mantle physics. Their bot modes
++        // are now executable, although automatic graph links are not yet baked.
+         if intent.path == PathOutcome::BudgetExhausted || intent.path == PathOutcome::ProgressLost {
+             return MotorReport::Executing;
+         }
+@@ -85,7 +84,12 @@
+             self.armed = Some(obs.self_state.life_sequence);
+         }
+         let dt = dt_ms.max(1) as f32;
+-        if let Some(at) = intent.look_at {
++        let traversal_look = if matches!(intent.move_mode, MoveMode::Jump | MoveMode::Mantle | MoveMode::Ladder) {
++            intent.move_goal.map(|goal| [goal[0], goal[1], obs.eye()[2]])
++        } else {
++            None
++        };
++        if let Some(at) = traversal_look.or(intent.look_at) {
+             if self
+                 .last_look
+                 .is_none_or(|old| dist2(old, at) > 48.0 * 48.0)
+@@ -112,14 +116,12 @@
+             self.pitch_vel = 0.0;
+             self.last_look = None;
+         }
+-        let unsupported = matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder);
+-        let walking = matches!(intent.move_mode, MoveMode::Walk | MoveMode::Drop)
+-            && matches!(intent.path, PathOutcome::Clear | PathOutcome::ProgressLost);
++        let walking = matches!(
++            intent.move_mode,
++            MoveMode::Walk | MoveMode::Drop | MoveMode::Jump | MoveMode::Mantle | MoveMode::Ladder
++        ) && matches!(intent.path, PathOutcome::Clear | PathOutcome::ProgressLost);
+         let (mut forwardmove, mut rightmove) = (0i8, 0i8);
+-        if !unsupported
+-            && walking
+-            && let Some(goal) = intent.move_goal
+-        {
++        if walking && let Some(goal) = intent.move_goal {
+             let wish = [
+                 goal[0] - obs.self_state.origin[0],
+                 goal[1] - obs.self_state.origin[1],
+@@ -150,6 +152,15 @@
+         if intent.use_button {
+             cmd.buttons |= buttons::USE;
+         }
++        // A jump command also activates the engine's mantle check when the
++        // surface is marked mantleable. Ladder physics consumes forward input
++        // while facing a ladder; no artificial vertical velocity is applied.
++        if matches!(intent.move_mode, MoveMode::Jump | MoveMode::Mantle)
++            && walking
++            && forwardmove != 0
++        {
++            cmd.buttons |= buttons::JUMP;
++        }
+         if intent.reload {
+             cmd.buttons |= buttons::RELOAD;
+         }
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -146,7 +146,7 @@
+     pub fn stuck(&self, tick: u32) -> bool {
+         matches!(
+             self.intent.move_mode,
+-            MoveMode::Walk | MoveMode::Drop | MoveMode::BreakGlass
++            MoveMode::Walk | MoveMode::Jump | MoveMode::Drop | MoveMode::BreakGlass
+         ) && tick.saturating_sub(self.progress_tick) >= STUCK_TICKS
+     }
++
+@@ -551,8 +551,8 @@
+         }
+         let moving = matches!(
+             self.intent.move_mode,
+-            MoveMode::Walk | MoveMode::Drop | MoveMode::BreakGlass
+-        ) || self.intent.path == PathOutcome::Blocked;
++            MoveMode::Walk | MoveMode::Jump | MoveMode::Drop | MoveMode::BreakGlass
++        ) || matches!(self.intent.path, PathOutcome::Blocked | PathOutcome::BudgetExhausted | PathOutcome::Unreachable | PathOutcome::IncompleteGraph);
+         if !moving || obs.tick.saturating_sub(self.progress_tick) < 40 {
+             return None;
+         }
+@@ -584,7 +584,19 @@
+             if floor.startsolid || floor.fraction >= 1.0 {
+                 continue;
+             }
+-            self.escape = Some((floor.endpos, obs.tick + 16));
++            // An escape must break the stale search, not resume the same
++            // unreachable destination on the next think.
++            if let Some(goal) = self.route_goal {
++                self.remember_failed_goal(goal, obs.tick);
++            }
++            self.committed.clear();
++            self.route_goal = None;
++            self.route_work.cancel();
++            self.roam = None;
++            self.fight_scan = None;
++            self.route_blocked_since = None;
++            self.escape = Some((floor.endpos, obs.tick + 24));
++            diag::info!(Sim, "bots: id={} tick={} nav_escape=started origin=({:.0},{:.0},{:.0}) target=({:.0},{:.0},{:.0})", obs.self_state.id.0, obs.tick, here[0], here[1], here[2], floor.endpos[0], floor.endpos[1], floor.endpos[2]);
+             return Some(BotIntent {
+                 look_at: Some(floor.endpos),
+                 move_goal: Some(floor.endpos),
+@@ -593,6 +605,16 @@
+                 ..BotIntent::default()
+             });
+         }
++        // No safe escape was verified. Invalidate the current route so the
++        // next scheduled think can seek a different supported destination.
++        if let Some(goal) = self.route_goal {
++            self.remember_failed_goal(goal, obs.tick);
++        }
++        self.committed.clear();
++        self.route_goal = None;
++        self.route_work.cancel();
++        self.roam = None;
++        self.fight_scan = None;
+         None
+     }
++
+@@ -1376,11 +1398,24 @@
+             Ok(WalkSample::Blocked) => {
+                 let attempts = self.route_blocked_since.get_or_insert(0);
+                 *attempts = attempts.saturating_add(1);
++                // Try the native jump/mantle input only at a *nearby* upward
++                // obstacle. This is not permission to traverse arbitrary gaps
++                // or climb tall walls: normal blocked-route recovery still runs.
++                // Pulse the attempt rather than holding jump every tick.
++                let rise = step.position[2] - from[2];
++                let near = dist_xy(from, step.position) <= 72.0;
++                if near && (8.0..=48.0).contains(&rise)
++                    && matches!(*attempts, 2 | 5 | 8)
++                {
++                    return (MoveMode::Jump, PathOutcome::Clear, Some(step.position));
++                }
+                 if *attempts >= ROUTE_RETRY_TICKS / THINK_PERIOD_TICKS {
+                     self.committed.clear();
+                     self.route_goal = None;
+                     self.route_work.cancel();
+                     self.route_blocked_since = None;
++                    self.roam = None;
++                    self.fight_scan = None;
+                 }
+                 (MoveMode::Hold, PathOutcome::Blocked, Some(step.position))
+             }
