@@ -13,7 +13,7 @@
 +++ b/crates/bots/src/motor.rs
 @@ -46,9 +46,8 @@
      }
-+
+ 
      pub fn report(&self, obs: &BotObservation, intent: &BotIntent, cmd: &UserCmd) -> MotorReport {
 -        if matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder) {
 -            return MotorReport::Unsupported;
@@ -83,7 +83,7 @@
 +            MoveMode::Walk | MoveMode::Jump | MoveMode::Drop | MoveMode::BreakGlass
          ) && tick.saturating_sub(self.progress_tick) >= STUCK_TICKS
      }
-+
+ 
 @@ -551,8 +551,8 @@
          }
          let moving = matches!(
@@ -132,7 +132,7 @@
 +        self.fight_scan = None;
          None
      }
-+
+ 
 @@ -1376,11 +1398,24 @@
              Ok(WalkSample::Blocked) => {
                  let attempts = self.route_blocked_since.get_or_insert(0);
