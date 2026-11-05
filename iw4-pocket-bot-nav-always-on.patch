@@ -1,0 +1,56 @@
+diff --git a/crates/bots/src/nav.rs b/crates/bots/src/nav.rs
+--- a/crates/bots/src/nav.rs
++++ b/crates/bots/src/nav.rs
+@@ -759,16 +759,22 @@ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
+     let start = nearest_within(graph, from, SNAP_IN)?;
+     let comp = graph.component[start as usize];
+     let mut best: Option<(u32, [f32; 3])> = None;
+     let mut fallback = None;
++    let mut component_nodes = 0usize;
++    let mut preferred_nodes = 0usize;
++    let mut farthest_planar = 0.0f32;
+     for (i, pos) in graph.nodes.iter().enumerate() {
+         if graph.component[i] != comp {
+             continue;
+         }
++        component_nodes += 1;
+         let planar = dist_xy(*pos, from);
++        farthest_planar = farthest_planar.max(planar);
+         if planar > 8.0 && fallback.is_none() {
+             fallback = Some(*pos);
+         }
+         if !(128.0..=1024.0).contains(&planar) {
+             continue;
+         }
++        preferred_nodes += 1;
+         let mut h = (i as u32).wrapping_add(salt.wrapping_mul(0x9E37_79B1));
+@@ -779,5 +785,13 @@ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
+             best = Some((h, *pos));
+         }
+     }
+-    best.map(|(_, pos)| pos).or(fallback)
++    let used_fallback = best.is_none();
++    let selected = best.map(|(_, pos)| pos).or(fallback);
++    eprintln!(
++            "bot-nav roam: start_node={} component={} component_nodes={} preferred_nodes={} farthest_xy={:.0} fallback={} selected_xy={:.0} truncated={}",
++            start, comp, component_nodes, preferred_nodes, farthest_planar,
++            used_fallback,
++            selected.map_or(0.0, |pos| dist_xy(pos, from)), graph.truncated
++    );
++    selected
+ }
+diff --git a/crates/bots/src/controller.rs b/crates/bots/src/controller.rs
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -683,3 +683,11 @@
+         let (move_mode, path, move_goal) =
+             self.route(obs.self_state.origin, goal, world, nav, astar_budget);
++        if matches!(path, PathOutcome::Blocked | PathOutcome::Unreachable | PathOutcome::IncompleteGraph)
++            && obs.tick % 100 == 0
++        {
++            eprintln!(
++                "bot-nav route-failed: bot={} tick={} from={:?} roam_goal={:?} outcome={:?}",
++                obs.self_state.id.0, obs.tick, obs.self_state.origin, goal, path
++            );
++        }
+         // Incomplete coverage is not a wall: pick another roam destination
