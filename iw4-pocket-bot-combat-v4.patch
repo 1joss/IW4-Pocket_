@@ -1,0 +1,248 @@
+diff --git a/crates/bots/src/controller.rs b/crates/bots/src/controller.rs
+index 2ae9550..e3e421b 100644
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -7,6 +7,7 @@ use crate::motor::Motor;
+ use crate::nav::{self, NavGraph, PathError};
+ use crate::observation::{
+     BotEvent, BotObservation, Contact, KnowledgeSource, ModeObjective, ObjectiveAction, TeamRole,
++    WeaponClass, WeaponDamageRange,
+ };
+ use crate::query::{QueryResult, QuerySubsystem, SightSample, WalkSample, WorldQuery};
+ use crate::task::{ActionStage, Decision, SwitchReason, Task, TaskKind};
+@@ -35,6 +36,14 @@ const FIGHT_SCAN_MAX_AGE_TICKS: u32 = 8;
+ const FIGHT_COMMIT_MAX_AGE_TICKS: u32 = 60;
+ /// Commanded movement without displacement for this long is a stuck bot.
+ const STUCK_TICKS: u32 = 40;
++/// Beyond the weapon's falloff endpoint, aiming and movement continue but
++/// shots are restricted by class-specific human-like engagement discipline.
++/// These are AI tactical limits, not a change to weapon ballistics.
++const ASSAULT_FIRE_MAX: f32 = 2200.0;
++const SMG_FIRE_MAX: f32 = 1400.0;
++const LMG_FIRE_MAX: f32 = 2800.0;
++const SNIPER_FIRE_MAX: f32 = 4500.0;
++const SHOTGUN_FIRE_MAX: f32 = 650.0;
+ const GOAL_RESERVATION_RADIUS: f32 = 96.0;
+ const GOAL_RESERVATION_PENALTY: f32 = 24.0;
+ 
+@@ -287,7 +296,13 @@ impl HostController {
+         if obs.seen.iter().any(|contact| contact.id == *id) {
+             *since = obs.tick;
+         }
+-        if obs.tick.saturating_sub(*since) > FIRE_FRESH_TICKS {
++        // A target may keep moving between decision ticks. A previous shot
++        // authorization must not bypass the weapon's range gate.
++        let range_ok = obs.seen.iter().find(|contact| contact.id == *id).is_none_or(|contact| {
++            dist2(obs.self_state.origin, contact.origin).sqrt()
++                <= engagement_limit(obs.self_state.weapon_class, None)
++        });
++        if obs.tick.saturating_sub(*since) > FIRE_FRESH_TICKS || !range_ok {
+             self.intent.fire = false;
+         }
+     }
+@@ -822,14 +837,29 @@ impl HostController {
+                 }
+             }
+         }
++        let range = dist2(obs.self_state.origin, target.origin).sqrt();
++        let damage = world.weapon_damage_range(obs.self_state.weapon);
++        let limit = engagement_limit(obs.self_state.weapon_class, damage);
++        // At longer distances, require both torso and upper-body shot traces.
++        // A single pixel-sized line of fire no longer authorizes a cross-map shot.
++        let exposure_ok = if range <= limit && range > limit * 0.55
++            && shot_allowed(shot, target.id) && fresh_contact(obs, target)
++        {
++            let upper = [target.origin[0], target.origin[1], target.origin[2] + 60.0];
++            let lower = [target.origin[0], target.origin[1], target.origin[2] + 32.0];
++            shot_allowed(world.shot_ray(obs.eye(), upper, obs.self_state.id), target.id)
++                && shot_allowed(world.shot_ray(obs.eye(), lower, obs.self_state.id), target.id)
++        } else {
++            true
++        };
+         let fire = self.authorize_fire(
+-            obs.tick >= self.reaction_until
++            range <= limit && exposure_ok
++                && obs.tick >= self.reaction_until
+                 && obs.self_state.ammo_clip != 0
+                 && fresh_contact(obs, target)
+                 && shot_allowed(shot, target.id),
+             target,
+         );
+-        let range = dist2(obs.self_state.origin, target.origin).sqrt();
+         let hold = self.hold_range(obs);
+         let (move_mode, path, move_goal) = self.fight_position(
+             obs,
+@@ -839,7 +869,7 @@ impl HostController {
+             aim_at,
+             target,
+             shot,
+-            range <= hold,
++            range <= hold && range <= limit,
+         );
+         if matches!(
+             path,
+@@ -921,8 +951,13 @@ impl HostController {
+         let aim_at = [target.origin[0], target.origin[1], target.origin[2] + 48.0];
+         let away = away_from(obs.self_state.origin, target.origin, 192.0);
+         world.enter(QuerySubsystem::Tactical);
++        let range = dist2(obs.self_state.origin, target.origin).sqrt();
++        let limit = engagement_limit(
++            obs.self_state.weapon_class,
++            world.weapon_damage_range(obs.self_state.weapon),
++        );
+         let fire = self.authorize_fire(
+-            self.aggression > self.self_preserve
++            range <= limit && self.aggression > self.self_preserve
+                 && obs.tick >= self.reaction_until
+                 && obs.self_state.ammo_clip != 0
+                 && fresh_contact(obs, target)
+@@ -1527,6 +1562,62 @@ fn choose_objective(
+     deferred
+ }
+ 
++/// Prefer the actual weapon's falloff curve, while retaining a class cap for
++/// no-falloff guns and a fallback when content is not yet loaded. A valid
++/// finite bullet range is an absolute ceiling; the tactical limit is stricter.
++fn engagement_limit(class: WeaponClass, damage: Option<WeaponDamageRange>) -> f32 {
++    let class_cap = match class {
++        WeaponClass::Assault => ASSAULT_FIRE_MAX,
++        WeaponClass::Smg => SMG_FIRE_MAX,
++        WeaponClass::Lmg => LMG_FIRE_MAX,
++        WeaponClass::Sniper => SNIPER_FIRE_MAX,
++        WeaponClass::Shotgun => SHOTGUN_FIRE_MAX,
++    };
++    let Some(damage) = damage else { return class_cap };
++    let mut cap = class_cap;
++    if damage.min_damage > 0 && damage.damage > damage.min_damage
++        && damage.minimum_damage_range.is_finite()
++        && damage.minimum_damage_range > 0.0
++    {
++        // Allow some space beyond the final falloff breakpoint, but never
++        // make a short-range weapon behave like a sniper.
++        cap = cap.min(damage.minimum_damage_range * 1.15);
++    }
++    if damage.bullet_range.is_finite() && damage.bullet_range > 0.0 {
++        cap = cap.min(damage.bullet_range);
++    }
++    cap.max(64.0)
++}
++
++#[cfg(test)]
++mod engagement_tests {
++    use super::*;
++
++    #[test]
++    fn real_falloff_limits_smg() {
++        let curve = WeaponDamageRange { damage: 40, min_damage: 20,
++            full_damage_range: 600.0, minimum_damage_range: 850.0,
++            bullet_range: 8000.0 };
++        assert_eq!(engagement_limit(WeaponClass::Smg, Some(curve)), 977.5);
++    }
++
++    #[test]
++    fn no_falloff_still_has_class_limit() {
++        let curve = WeaponDamageRange { damage: 70, min_damage: 70,
++            full_damage_range: 0.0, minimum_damage_range: 0.0,
++            bullet_range: 9000.0 };
++        assert_eq!(engagement_limit(WeaponClass::Sniper, Some(curve)), 4500.0);
++    }
++
++    #[test]
++    fn never_exceeds_physical_bullet_range() {
++        let curve = WeaponDamageRange { damage: 40, min_damage: 20,
++            full_damage_range: 100.0, minimum_damage_range: 300.0,
++            bullet_range: 250.0 };
++        assert_eq!(engagement_limit(WeaponClass::Shotgun, Some(curve)), 250.0);
++    }
++}
++
+ /// A positive observation of this contact, recent enough to shoot at. A contact
+ /// held through unsensed ticks still aims and moves; it does not fire.
+ fn fresh_contact(obs: &BotObservation, target: Contact) -> bool {
+diff --git a/crates/bots/src/observation.rs b/crates/bots/src/observation.rs
+index 69315ad..73f0e0f 100644
+--- a/crates/bots/src/observation.rs
++++ b/crates/bots/src/observation.rs
+@@ -55,6 +55,17 @@ pub enum WeaponClass {
+     Shotgun,
+ }
+ 
++/// Damage curve read from the loaded IW4 weapon definition. These are game
++/// units, not metres; no-falloff weapons still need a tactical engagement cap.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct WeaponDamageRange {
++    pub damage: i32,
++    pub min_damage: i32,
++    pub full_damage_range: f32,
++    pub minimum_damage_range: f32,
++    pub bullet_range: f32,
++}
++
+ impl WeaponClass {
+     pub fn fight_hold(self) -> f32 {
+         match self {
+diff --git a/crates/bots/src/query.rs b/crates/bots/src/query.rs
+index 8e02f8b..9591074 100644
+--- a/crates/bots/src/query.rs
++++ b/crates/bots/src/query.rs
+@@ -4,7 +4,7 @@ use sim::{
+ };
+ use sim::{ClientId, SimWorld};
+ 
+-use crate::observation::{ModeObjective, WeaponClass, WeaponFacts};
++use crate::observation::{ModeObjective, WeaponClass, WeaponDamageRange, WeaponFacts};
+ 
+ /// CONTENTS_GLASS as in `weapon_iw4`. Sight omits it; shots do not.
+ const CONTENTS_GLASS: u32 = 0x10;
+@@ -212,6 +212,11 @@ pub trait WorldQuery {
+         WeaponClass::Assault
+     }
+ 
++    /// The authoritative loaded weapon damage curve, if available.
++    fn weapon_damage_range(&self, _weapon: u16) -> Option<WeaponDamageRange> {
++        None
++    }
++
+     /// Timing and magazine facts the weapon-readiness skill needs. `None` for an
+     /// id the content has no usable weapon for.
+     fn weapon_facts(&self, _weapon: u16) -> Option<WeaponFacts> {
+@@ -265,6 +270,10 @@ impl<W: WorldQuery> WorldQuery for Primitives<'_, W> {
+         self.world.weapon_class(weapon)
+     }
+ 
++    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
++        self.world.weapon_damage_range(weapon)
++    }
++
+     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
+         self.world.weapon_facts(weapon)
+     }
+@@ -353,6 +362,10 @@ impl<W: WorldQuery> WorldQuery for Budgeted<'_, W> {
+         self.world.weapon_class(weapon)
+     }
+ 
++    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
++        self.world.weapon_damage_range(weapon)
++    }
++
+     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
+         self.world.weapon_facts(weapon)
+     }
+@@ -409,6 +422,17 @@ impl WorldQuery for SimWorld {
+         WeaponClass::from_script_name(self.weapon_script_name(u32::from(weapon)))
+     }
+ 
++    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
++        let facts = self.weapon_combat_facts(u32::from(weapon))?;
++        Some(WeaponDamageRange {
++            damage: facts.damage,
++            min_damage: facts.min_damage,
++            full_damage_range: facts.max_damage_range,
++            minimum_damage_range: facts.min_damage_range,
++            bullet_range: facts.bullet_range(),
++        })
++    }
++
+     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
+         let facts = self.weapon_combat_facts(u32::from(weapon))?;
+         Some(WeaponFacts {

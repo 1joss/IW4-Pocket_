@@ -30,6 +30,9 @@ jobs:
 
           git apply --check iw4-pocket-bot-navigation-v3.patch
           git apply iw4-pocket-bot-navigation-v3.patch
+
+          git apply --check iw4-pocket-bot-combat-v4.patch
+          git apply iw4-pocket-bot-combat-v4.patch
       - run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-ios
       - name: Test memory controls and package contracts
         run: |
