@@ -1,5 +1,5 @@
 diff --git a/crates/bots/src/controller.rs b/crates/bots/src/controller.rs
-index 2ae9550..e3e421b 100644
+index 6c23e01..ec7c0c8 100644
 --- a/crates/bots/src/controller.rs
 +++ b/crates/bots/src/controller.rs
 @@ -7,6 +7,7 @@ use crate::motor::Motor;
@@ -22,10 +22,10 @@ index 2ae9550..e3e421b 100644
 +const LMG_FIRE_MAX: f32 = 2800.0;
 +const SNIPER_FIRE_MAX: f32 = 4500.0;
 +const SHOTGUN_FIRE_MAX: f32 = 650.0;
- const GOAL_RESERVATION_RADIUS: f32 = 96.0;
- const GOAL_RESERVATION_PENALTY: f32 = 24.0;
- 
-@@ -287,7 +296,13 @@ impl HostController {
+ const ROUTE_RETRY_TICKS: u32 = 24;
+ const FIGHT_REPOSITION_TICKS: u32 = 100;
+ const FAILED_GOAL_RADIUS: f32 = 72.0;
+@@ -311,7 +320,13 @@ impl HostController {
          if obs.seen.iter().any(|contact| contact.id == *id) {
              *since = obs.tick;
          }
@@ -40,7 +40,7 @@ index 2ae9550..e3e421b 100644
              self.intent.fire = false;
          }
      }
-@@ -822,14 +837,29 @@ impl HostController {
+@@ -899,14 +914,29 @@ impl HostController {
                  }
              }
          }
@@ -72,7 +72,7 @@ index 2ae9550..e3e421b 100644
          let hold = self.hold_range(obs);
          let (move_mode, path, move_goal) = self.fight_position(
              obs,
-@@ -839,7 +869,7 @@ impl HostController {
+@@ -916,7 +946,7 @@ impl HostController {
              aim_at,
              target,
              shot,
@@ -81,7 +81,7 @@ index 2ae9550..e3e421b 100644
          );
          if matches!(
              path,
-@@ -921,8 +951,13 @@ impl HostController {
+@@ -998,8 +1028,13 @@ impl HostController {
          let aim_at = [target.origin[0], target.origin[1], target.origin[2] + 48.0];
          let away = away_from(obs.self_state.origin, target.origin, 192.0);
          world.enter(QuerySubsystem::Tactical);
@@ -96,7 +96,7 @@ index 2ae9550..e3e421b 100644
                  && obs.tick >= self.reaction_until
                  && obs.self_state.ammo_clip != 0
                  && fresh_contact(obs, target)
-@@ -1527,6 +1562,62 @@ fn choose_objective(
+@@ -1660,6 +1695,62 @@ fn choose_objective(
      deferred
  }
  
