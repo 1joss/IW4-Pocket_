@@ -20,6 +20,13 @@ jobs:
         run: |
           git apply --check iw4-pocket-bot-navigation-p0-p2.patch
           git apply iw4-pocket-bot-navigation-p0-p2.patch
+                - name: Apply bot navigation patches
+        run: |
+          git apply --check iw4-pocket-bot-navigation-p0-p2.patch
+          git apply iw4-pocket-bot-navigation-p0-p2.patch
+
+          git apply --check iw4-pocket-bot-vertical-traversal-v1.patch
+          git apply iw4-pocket-bot-vertical-traversal-v1.patch
       - run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-ios
       - name: Test memory controls and package contracts
         run: |
