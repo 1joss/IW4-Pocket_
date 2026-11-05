@@ -16,6 +16,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Apply bot diagnostics
+        run: |
+          git apply --check iw4-pocket-bot-nav-always-on.patch
+          git apply iw4-pocket-bot-nav-always-on.patch
       - run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-ios
       - name: Test memory controls and package contracts
         run: |
