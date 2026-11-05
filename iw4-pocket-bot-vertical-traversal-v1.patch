@@ -1,0 +1,40 @@
+--- a/crates/bots/src/nav.rs
++++ b/crates/bots/src/nav.rs
+@@ -7,7 +7,7 @@
+ use crate::observation::ModeObjective;
+ use crate::query::{HullTrace, QueryResult, QuerySubsystem, SightSample, WalkSample, WorldQuery};
+ 
+-pub const NAV_SCHEMA: u32 = 9;
++pub const NAV_SCHEMA: u32 = 10;
+ pub const GRID_IN: f32 = 48.0;
+ pub const SNAP_IN: f32 = 256.0;
+ pub const STEP_Z_IN: f32 = 18.0;
+@@ -426,7 +426,14 @@
+                     ) else {
+                         return false;
+                     };
+-                    hit.startsolid || hit.fraction >= 1.0 || hit.normal[2] < 0.7
++                    // A neighbouring sample can have perfectly walkable ground
++                    // at a different height. Treat that as a refinement boundary
++                    // so narrow stair treads and ramp transitions receive the
++                    // 24-unit samples, not just cliffs and solid obstacles.
++                    hit.startsolid
++                        || hit.fraction >= 1.0
++                        || hit.normal[2] < 0.7
++                        || (hit.endpos[2] - feet[2]).abs() > STEP_Z_IN * 0.5
+                 });
+         floors.push(Floor {
+             feet,
+@@ -607,7 +614,11 @@
+                 continue;
+             }
+             let dz = (a[2] - b[2]).abs();
+-            if dz > STEP_Z_IN.max(planar * 0.75) {
++            // Do not infer walkability from elevation alone: the continuous
++            // support probe below validates every intermediate floor sample.
++            // Allow steeper candidates at short range so the refined stair
++            // samples can actually connect. A rejected candidate adds no edge.
++            if dz > STEP_Z_IN.max(planar) {
+                 continue;
+             }
+             let kind = match supported_walk(&mut probe, a, b) {
