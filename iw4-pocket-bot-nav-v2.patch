@@ -1,0 +1,56 @@
+--- a/crates/bots/src/controller.rs
++++ b/crates/bots/src/controller.rs
+@@ -259,4 +259,16 @@
+         let cmd = self.motor.drive(obs, &self.intent, dt_ms);
+         self.report = self.motor.report(obs, &self.intent, &cmd);
++        // Sampled once per bot per 100 simulation ticks; use the iOS boot log,
++        // not stderr, so LiveContainer users can retrieve the measurements.
++        if obs.tick % 100 == obs.self_state.id.0 % 100 {
++            diag::boot_note(&format!(
++                "[bot-nav2] tick={} id={} task={:?} reason={:?} pos={:?} mode={:?} path={:?} goal={:?} roam={:?} route_goal={:?} route_age={:?} stuck={} report={:?} cmd_fwd={} cmd_right={} budget_left={}",
++                obs.tick, obs.self_state.id.0, self.task.kind, self.task.reason,
++                obs.self_state.origin, self.intent.move_mode, self.intent.path,
++                self.intent.move_goal, self.roam, self.route_goal,
++                self.route_work.live_age(), self.stuck(obs.tick), self.report,
++                cmd.forwardmove, cmd.rightmove, *astar_budget,
++            ));
++        }
+         self.last_cmd = cmd;
+         cmd
+@@ -742,4 +742,21 @@
+         };
++        if obs.tick % 100 == obs.self_state.id.0 % 100 {
++            if let Some(graph) = nav.filter(|graph| !graph.is_empty()) {
++                let start = nav::nearest_within(graph, obs.self_state.origin, nav::SNAP_IN);
++                let comp = start.and_then(|i| graph.component.get(i as usize)).copied();
++                let (component_nodes, preferred_nodes, farthest_xy) = graph.nodes.iter().enumerate()
++                    .filter(|(i, _)| comp.is_some_and(|c| graph.component.get(*i) == Some(&c)))
++                    .fold((0usize, 0usize, 0.0f32), |(n, preferred, farthest), (_, pos)| {
++                        let d = dist_xy(*pos, obs.self_state.origin);
++                        (n + 1, preferred + usize::from((128.0..=1024.0).contains(&d)), farthest.max(d))
++                    });
++                diag::boot_note(&format!(
++                    "[bot-nav2] roam id={} tick={} component={:?} component_nodes={} preferred_nodes={} farthest_xy={:.0} selected={:?} selected_xy={:.0}",
++                    obs.self_state.id.0, obs.tick, comp, component_nodes, preferred_nodes,
++                    farthest_xy, next, next.map_or(0.0, |p| dist_xy(p, obs.self_state.origin)),
++                ));
++            }
++        }
+         self.roam = next;
+         next
+     }
+@@ -818,4 +818,14 @@
+             shot,
+             range <= hold,
+         );
++        if obs.tick % 100 == obs.self_state.id.0 % 100 {
++            diag::boot_note(&format!(
++                "[bot-nav2] fight id={} tick={} target={} range={:.0} hold={:.0} in_hold={} shot_allowed={} fire={} mode={:?} path={:?} goal={:?} goal_at_self={} scan={:?} budget_left={}",
++                obs.self_state.id.0, obs.tick, target.id.0, range, hold, range <= hold,
++                shot_allowed(shot, target.id), fire, move_mode, path, move_goal,
++                move_goal.is_some_and(|p| dist2(p, obs.self_state.origin) <= 1.0),
++                self.fight_scan.as_ref().map(|s| (s.cursor, s.candidates.len(), s.accepted.len(), s.chosen)),
++                *astar_budget,
++            ));
++        }
+         if matches!(
