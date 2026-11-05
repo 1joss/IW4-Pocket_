@@ -16,11 +16,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Apply bot navigation improvements
-        run: |
-          git apply --check iw4-pocket-bot-navigation-p0-p2.patch
-          git apply iw4-pocket-bot-navigation-p0-p2.patch
-                - name: Apply bot navigation patches
+      - 
+          
+      - name: Apply bot navigation patches
         run: |
           git apply --check iw4-pocket-bot-navigation-p0-p2.patch
           git apply iw4-pocket-bot-navigation-p0-p2.patch
