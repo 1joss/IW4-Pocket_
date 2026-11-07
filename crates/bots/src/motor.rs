@@ -46,9 +46,8 @@ impl Motor {
     }
 
     pub fn report(&self, obs: &BotObservation, intent: &BotIntent, cmd: &UserCmd) -> MotorReport {
-        if matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder) {
-            return MotorReport::Unsupported;
-        }
+        // The simulator implements ladder and mantle physics. Their bot modes
+        // are now executable, although automatic graph links are not yet baked.
         if intent.path == PathOutcome::BudgetExhausted || intent.path == PathOutcome::ProgressLost {
             return MotorReport::Executing;
         }
@@ -85,7 +84,12 @@ impl Motor {
             self.armed = Some(obs.self_state.life_sequence);
         }
         let dt = dt_ms.max(1) as f32;
-        if let Some(at) = intent.look_at {
+        let traversal_look = if matches!(intent.move_mode, MoveMode::Jump | MoveMode::Mantle | MoveMode::Ladder) {
+            intent.move_goal.map(|goal| [goal[0], goal[1], obs.eye()[2]])
+        } else {
+            None
+        };
+        if let Some(at) = traversal_look.or(intent.look_at) {
             if self
                 .last_look
                 .is_none_or(|old| dist2(old, at) > 48.0 * 48.0)
@@ -112,14 +116,12 @@ impl Motor {
             self.pitch_vel = 0.0;
             self.last_look = None;
         }
-        let unsupported = matches!(intent.move_mode, MoveMode::Mantle | MoveMode::Ladder);
-        let walking = matches!(intent.move_mode, MoveMode::Walk | MoveMode::Drop)
-            && matches!(intent.path, PathOutcome::Clear | PathOutcome::ProgressLost);
+        let walking = matches!(
+            intent.move_mode,
+            MoveMode::Walk | MoveMode::Drop | MoveMode::Jump | MoveMode::Mantle | MoveMode::Ladder
+        ) && matches!(intent.path, PathOutcome::Clear | PathOutcome::ProgressLost);
         let (mut forwardmove, mut rightmove) = (0i8, 0i8);
-        if !unsupported
-            && walking
-            && let Some(goal) = intent.move_goal
-        {
+        if walking && let Some(goal) = intent.move_goal {
             let wish = [
                 goal[0] - obs.self_state.origin[0],
                 goal[1] - obs.self_state.origin[1],
@@ -149,6 +151,15 @@ impl Motor {
         }
         if intent.use_button {
             cmd.buttons |= buttons::USE;
+        }
+        // A jump command also activates the engine's mantle check when the
+        // surface is marked mantleable. Ladder physics consumes forward input
+        // while facing a ladder; no artificial vertical velocity is applied.
+        if matches!(intent.move_mode, MoveMode::Jump | MoveMode::Mantle)
+            && walking
+            && forwardmove != 0
+        {
+            cmd.buttons |= buttons::JUMP;
         }
         if intent.reload {
             cmd.buttons |= buttons::RELOAD;

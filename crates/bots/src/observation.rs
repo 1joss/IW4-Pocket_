@@ -55,6 +55,17 @@ pub enum WeaponClass {
     Shotgun,
 }
 
+/// Damage curve read from the loaded IW4 weapon definition. These are game
+/// units, not metres; no-falloff weapons still need a tactical engagement cap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeaponDamageRange {
+    pub damage: i32,
+    pub min_damage: i32,
+    pub full_damage_range: f32,
+    pub minimum_damage_range: f32,
+    pub bullet_range: f32,
+}
+
 impl WeaponClass {
     pub fn fight_hold(self) -> f32 {
         match self {

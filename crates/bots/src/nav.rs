@@ -7,7 +7,7 @@ use sim::{ClientId, SimBrush};
 use crate::observation::ModeObjective;
 use crate::query::{HullTrace, QueryResult, QuerySubsystem, SightSample, WalkSample, WorldQuery};
 
-pub const NAV_SCHEMA: u32 = 9;
+pub const NAV_SCHEMA: u32 = 10;
 pub const GRID_IN: f32 = 48.0;
 pub const SNAP_IN: f32 = 256.0;
 pub const STEP_Z_IN: f32 = 18.0;
@@ -426,7 +426,14 @@ fn column_floors(
                     ) else {
                         return false;
                     };
-                    hit.startsolid || hit.fraction >= 1.0 || hit.normal[2] < 0.7
+                    // A neighbouring sample can have perfectly walkable ground
+                    // at a different height. Treat that as a refinement boundary
+                    // so narrow stair treads and ramp transitions receive the
+                    // 24-unit samples, not just cliffs and solid obstacles.
+                    hit.startsolid
+                        || hit.fraction >= 1.0
+                        || hit.normal[2] < 0.7
+                        || (hit.endpos[2] - feet[2]).abs() > STEP_Z_IN * 0.5
                 });
         floors.push(Floor {
             feet,
@@ -607,7 +614,11 @@ pub fn bake_seeded(
                 continue;
             }
             let dz = (a[2] - b[2]).abs();
-            if dz > STEP_Z_IN.max(planar * 0.75) {
+            // Do not infer walkability from elevation alone: the continuous
+            // support probe below validates every intermediate floor sample.
+            // Allow steeper candidates at short range so the refined stair
+            // samples can actually connect. A rejected candidate adds no edge.
+            if dz > STEP_Z_IN.max(planar) {
                 continue;
             }
             let kind = match supported_walk(&mut probe, a, b) {
@@ -783,22 +794,49 @@ pub fn nearest_within(graph: &NavGraph, feet: [f32; 3], max_dist: f32) -> Option
     best.map(|(id, _)| id)
 }
 
+/// Directed reachability matters: the baked weak components deliberately ignore
+/// edge direction, so a one-way drop may put a goal in the same component even
+/// though it is impossible to reach from the bot's current floor.
+pub fn reachable_mask(graph: &NavGraph, start: u16) -> Vec<bool> {
+    let mut seen = vec![false; graph.nodes.len()];
+    if start as usize >= seen.len() { return seen; }
+    let mut queue = std::collections::VecDeque::new();
+    seen[start as usize] = true;
+    queue.push_back(start);
+    while let Some(id) = queue.pop_front() {
+        for edge in &graph.adj[id as usize] {
+            if !seen[edge.to as usize] {
+                seen[edge.to as usize] = true;
+                queue.push_back(edge.to);
+            }
+        }
+    }
+    seen
+}
+
+/// A deterministic, spatially distributed roam target chosen only from nodes
+/// that are actually reachable following directed links. The caller supplies a
+/// salt to vary the target without introducing nondeterministic simulation RNG.
 pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
     let start = nearest_within(graph, from, SNAP_IN)?;
-    let comp = graph.component[start as usize];
+    let reachable = reachable_mask(graph, start);
+    roam_node_reachable(graph, from, salt, &reachable)
+}
+
+/// Select a destination using a previously computed directed-reachability mask.
+/// Multiple candidates can share one graph traversal per decision.
+pub fn roam_node_reachable(graph: &NavGraph, from: [f32; 3], salt: u32, reachable: &[bool]) -> Option<[f32; 3]> {
+    if reachable.len() != graph.nodes.len() { return None; }
     let mut best: Option<(u32, [f32; 3])> = None;
-    let mut fallback = None;
+    let mut fallback: Option<(f32, [f32; 3])> = None;
     for (i, pos) in graph.nodes.iter().enumerate() {
-        if graph.component[i] != comp {
-            continue;
-        }
+        if !reachable[i] { continue; }
         let planar = dist_xy(*pos, from);
-        if planar > 8.0 && fallback.is_none() {
-            fallback = Some(*pos);
+        if planar > 96.0 && fallback.is_none_or(|(d, _)| planar > d) {
+            fallback = Some((planar, *pos));
         }
-        if !(128.0..=1024.0).contains(&planar) {
-            continue;
-        }
+        // A minimum distance prevents endless shuffling around spawn.
+        if !(320.0..=1400.0).contains(&planar) { continue; }
         let mut h = (i as u32).wrapping_add(salt.wrapping_mul(0x9E37_79B1));
         h = (h ^ (h >> 16)).wrapping_mul(0x85eb_ca6b);
         h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
@@ -807,7 +845,65 @@ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]
             best = Some((h, *pos));
         }
     }
-    best.map(|(_, pos)| pos).or(fallback)
+    best.map(|(_, pos)| pos).or_else(|| fallback.map(|(_, pos)| pos))
+}
+
+/// Compact, allocation-bounded audit for comparing navigation graphs across maps.
+/// Weak components are useful for coverage, but directed reachability is the
+/// authoritative test for spawn exits and one-way drops.
+#[derive(Clone, Debug)]
+pub struct NavAudit {
+    pub nodes: usize,
+    pub edges: usize,
+    pub walk_edges: usize,
+    pub drop_edges: usize,
+    pub glass_edges: usize,
+    pub isolated: usize,
+    pub weak_components: usize,
+    pub largest_component: usize,
+}
+
+pub fn audit(graph: &NavGraph) -> NavAudit {
+    let mut sizes = BTreeMap::<u16, usize>::new();
+    for id in &graph.component { *sizes.entry(*id).or_default() += 1; }
+    let mut out = NavAudit {
+        nodes: graph.nodes.len(), edges: 0, walk_edges: 0,
+        drop_edges: 0, glass_edges: 0, isolated: 0,
+        weak_components: sizes.len(),
+        largest_component: sizes.values().copied().max().unwrap_or(0),
+    };
+    for edges in &graph.adj {
+        out.edges += edges.len();
+        if edges.is_empty() { out.isolated += 1; }
+        for edge in edges {
+            match edge.kind {
+                TraversalKind::Walk => out.walk_edges += 1,
+                TraversalKind::Drop => out.drop_edges += 1,
+                TraversalKind::BreakGlass => out.glass_edges += 1,
+            }
+        }
+    }
+    out
+}
+
+/// Opt-in raw graph export for offline inspection. A caller-provided directory
+/// avoids assumptions about iOS sandbox paths; no file is written by default.
+pub fn export_audit_csv(graph: &NavGraph, directory: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(directory)?;
+    let mut nodes = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-nodes.csv"))?);
+    writeln!(nodes, "id,x,y,z,weak_component,out_degree")?;
+    for (i, p) in graph.nodes.iter().enumerate() {
+        writeln!(nodes, "{i},{},{},{},{},{}", p[0], p[1], p[2], graph.component[i], graph.adj[i].len())?;
+    }
+    let mut edges = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-edges.csv"))?);
+    writeln!(edges, "from,to,kind,cost")?;
+    for (i, row) in graph.adj.iter().enumerate() {
+        for e in row {
+            writeln!(edges, "{i},{},{:?},{}", e.to, e.kind, e.cost)?;
+        }
+    }
+    Ok(())
 }
 
 /// Baked supports that could serve as firing positions against a threat at
@@ -1370,6 +1466,66 @@ fn near_nodes(graph: &NavGraph, at: [f32; 3]) -> Vec<(u16, f32)> {
     nearby.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     nearby.truncate(8);
     nearby
+}
+
+/// Graph-only route diagnosis. This deliberately does not claim a collision-safe
+/// route: live start/goal connector probes and traversal execution remain authoritative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteTopology {
+    MissingStart,
+    MissingGoal,
+    NoDirectedPath,
+    DirectedPath,
+}
+
+/// Diagnose vertical routes using the SAME attachment height limit as the
+/// resumable planner. A downward drop never implies an upward connection.
+pub fn route_topology(graph: &NavGraph, from: [f32; 3], to: [f32; 3]) -> RouteTopology {
+    let starts = near_nodes(graph, from);
+    if starts.is_empty() { return RouteTopology::MissingStart; }
+    let goals = near_nodes(graph, to);
+    if goals.is_empty() { return RouteTopology::MissingGoal; }
+    let mut seen = vec![false; graph.nodes.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for (id, _) in starts {
+        if !seen[id as usize] {
+            seen[id as usize] = true;
+            queue.push_back(id);
+        }
+    }
+    while let Some(id) = queue.pop_front() {
+        if goals.iter().any(|(goal, _)| *goal == id) {
+            return RouteTopology::DirectedPath;
+        }
+        for edge in &graph.adj[id as usize] {
+            let next = edge.to as usize;
+            if next < seen.len() && !seen[next] {
+                seen[next] = true;
+                queue.push_back(edge.to);
+            }
+        }
+    }
+    RouteTopology::NoDirectedPath
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    #[test]
+    fn one_way_drop_is_not_an_upward_route() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0, 0.0, 192.0], [96.0, 0.0, 48.0]];
+        graph.adj = vec![vec![NavEdge { to: 1, cost: 240.0, kind: TraversalKind::Drop }], vec![]];
+        assert_eq!(route_topology(&graph, graph.nodes[0], graph.nodes[1]), RouteTopology::DirectedPath);
+        assert_eq!(route_topology(&graph, graph.nodes[1], graph.nodes[0]), RouteTopology::NoDirectedPath);
+    }
+    #[test]
+    fn stacked_floor_is_not_an_attachment() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0, 0.0, 192.0]];
+        graph.adj = vec![vec![]];
+        assert_eq!(route_topology(&graph, [0.0, 0.0, 48.0], graph.nodes[0]), RouteTopology::MissingStart);
+    }
 }
 
 #[derive(Clone, Debug)]

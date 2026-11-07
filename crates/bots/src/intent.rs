@@ -13,6 +13,8 @@ pub enum PathOutcome {
 pub enum MoveMode {
     Hold,
     Walk,
+    /// A short obstacle-assisted jump or mantle attempt, not a graph shortcut.
+    Jump,
     Drop,
     BreakGlass,
     Mantle,

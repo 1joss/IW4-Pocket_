@@ -348,7 +348,7 @@ fn boot_bots(
         world
             .0
             .set_client_rank_prestige(bot.id, bot.rank, bot.prestige);
-        let index = default_class_index(seed, bot.id, bot.class_picks);
+        let index = bot.class_index.unwrap_or_else(|| crate::roster::match_class_index(seed, bot.id));
         let join_id = request_ids.allocate();
         let class_request = request_ids.allocate();
         let name_request = request_ids.allocate();
@@ -379,6 +379,7 @@ fn boot_bots(
             continue;
         }
         bot.joined = true;
+        bot.class_index = Some(index);
         bot.class_picks += 1;
         diag::info!(
             Sim,
@@ -516,6 +517,19 @@ fn think_bots(mut p: ThinkBots) {
     let mut controller_us = 0u64;
     let reservations = bot_goal_reservations(&p.roster);
     let seed = p.roster.seed;
+    // Stable per-snapshot allied ranks. This runs once, outside the bot loop.
+    let team_slots: Vec<_> = p.roster.bots.iter().filter_map(|bot| {
+        let meta = snapshot.meta.for_client(bot.id)?;
+        let mut allied: Vec<_> = p.roster.bots.iter().filter(|other| {
+            snapshot.meta.for_client(other.id).is_some_and(|m|
+                m.lifecycle == ClientLifecycle::Alive && m.client_state_team == meta.client_state_team)
+        }).map(|other| other.id.0).collect();
+        allied.sort_unstable();
+        Some((bot.id, crate::team::TeamSlot {
+            rank: allied.iter().position(|&id| id == bot.id.0).unwrap_or(0),
+            count: allied.len(),
+        }))
+    }).collect();
     for offset in 0..count {
         let bot = &mut p.roster.bots[(start + offset) % count];
         let Some(meta) = snapshot.meta.for_client(bot.id) else {
@@ -528,14 +542,17 @@ fn think_bots(mut p: ThinkBots) {
             continue;
         }
         if bot.class_picked_in != Some(meta.life_sequence) {
-            bot.class_picked_in = Some(meta.life_sequence);
-            let index = default_class_index(seed, bot.id, bot.class_picks);
+            let index = bot.class_index.unwrap_or_else(|| crate::roster::match_class_index(seed, bot.id));
             let request_id = p.request_ids.allocate();
             match p.actions.push(
                 bot.id,
                 ClientAction::ChooseDefaultClass { request_id, index },
             ) {
-                Ok(()) => bot.class_picks += 1,
+                Ok(()) => {
+                    bot.class_index = Some(index);
+                    bot.class_picked_in = Some(meta.life_sequence);
+                    bot.class_picks += 1;
+                },
                 Err(error) => diag::warn!(
                     Sim,
                     "bots: client {} class pick not queued — {error}",
@@ -564,6 +581,8 @@ fn think_bots(mut p: ThinkBots) {
                 continue;
             };
             let started = std::time::Instant::now();
+            brain.set_team_slot(team_slots.iter().find(|(id, _)| *id == bot.id)
+                .map(|(_, slot)| *slot).unwrap_or_default());
             let mut cmd = brain.drive_nav(
                 &obs,
                 &mut queried,
@@ -704,6 +723,13 @@ fn refresh_nav(world: &SimWorld, nav: &mut BotNav, load: Option<&assets::MapLoad
     {
         if let Some(graph) = future::block_on(future::poll_once(task)) {
             nav.graph = graph;
+            let a = nav::audit(&nav.graph);
+            diag::info!(Sim, "bots: nav_audit nodes={} edges={} walk={} drops={} glass={} isolated={} weak_components={} largest_component={} truncated={}", a.nodes, a.edges, a.walk_edges, a.drop_edges, a.glass_edges, a.isolated, a.weak_components, a.largest_component, nav.graph.truncated);
+            if let Ok(dir) = std::env::var("IW4_NAV_AUDIT_DIR") {
+                if let Err(error) = nav::export_audit_csv(&nav.graph, std::path::Path::new(&dir)) {
+                    diag::warn!(Sim, "bots: nav_audit export failed: {error}");
+                }
+            }
             // The bake is only navigation once this graph is the one the bots
             // will read, which is here and not on the worker.
             if let Some(stage) = stage.take() {

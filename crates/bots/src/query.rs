@@ -4,7 +4,7 @@ use sim::{
 };
 use sim::{ClientId, SimWorld};
 
-use crate::observation::{ModeObjective, WeaponClass, WeaponFacts};
+use crate::observation::{ModeObjective, WeaponClass, WeaponDamageRange, WeaponFacts};
 
 /// CONTENTS_GLASS as in `weapon_iw4`. Sight omits it; shots do not.
 const CONTENTS_GLASS: u32 = 0x10;
@@ -212,6 +212,11 @@ pub trait WorldQuery {
         WeaponClass::Assault
     }
 
+    /// The authoritative loaded weapon damage curve, if available.
+    fn weapon_damage_range(&self, _weapon: u16) -> Option<WeaponDamageRange> {
+        None
+    }
+
     /// Timing and magazine facts the weapon-readiness skill needs. `None` for an
     /// id the content has no usable weapon for.
     fn weapon_facts(&self, _weapon: u16) -> Option<WeaponFacts> {
@@ -263,6 +268,10 @@ impl<W: WorldQuery> WorldQuery for Primitives<'_, W> {
 
     fn weapon_class(&self, weapon: u16) -> WeaponClass {
         self.world.weapon_class(weapon)
+    }
+
+    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
+        self.world.weapon_damage_range(weapon)
     }
 
     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
@@ -353,6 +362,10 @@ impl<W: WorldQuery> WorldQuery for Budgeted<'_, W> {
         self.world.weapon_class(weapon)
     }
 
+    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
+        self.world.weapon_damage_range(weapon)
+    }
+
     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
         self.world.weapon_facts(weapon)
     }
@@ -407,6 +420,17 @@ impl WorldQuery for SimWorld {
 
     fn weapon_class(&self, weapon: u16) -> WeaponClass {
         WeaponClass::from_script_name(self.weapon_script_name(u32::from(weapon)))
+    }
+
+    fn weapon_damage_range(&self, weapon: u16) -> Option<WeaponDamageRange> {
+        let facts = self.weapon_combat_facts(u32::from(weapon))?;
+        Some(WeaponDamageRange {
+            damage: facts.damage,
+            min_damage: facts.min_damage,
+            full_damage_range: facts.max_damage_range,
+            minimum_damage_range: facts.min_damage_range,
+            bullet_range: facts.bullet_range(),
+        })
     }
 
     fn weapon_facts(&self, weapon: u16) -> Option<WeaponFacts> {
