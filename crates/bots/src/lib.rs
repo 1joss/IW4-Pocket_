@@ -1,4 +1,5 @@
 mod controller;
+mod experience;
 mod intent;
 mod memory;
 mod motor;
@@ -10,7 +11,10 @@ mod roster;
 #[cfg(test)]
 mod roster_contract_tests;
 mod sensor;
+mod strategy;
 mod task;
+mod tactics;
+mod team;
 pub mod unique_loadout;
 mod weapon;
 

@@ -58,6 +58,11 @@ impl BotMeter {
                 .discarded_attachments
                 .saturating_sub(was.discarded_attachments),
             denied_slices: totals.denied_slices.saturating_sub(was.denied_slices),
+            astar_new: totals.astar_new.saturating_sub(was.astar_new),
+            astar_reused: totals.astar_reused.saturating_sub(was.astar_reused),
+            astar_recycled: totals.astar_recycled.saturating_sub(was.astar_recycled),
+            astar_cancelled: totals.astar_cancelled.saturating_sub(was.astar_cancelled),
+            astar_buffer_grows: totals.astar_buffer_grows.saturating_sub(was.astar_buffer_grows),
             ..RouteStats::default()
         };
         self.routes_at_report = totals;
@@ -72,7 +77,8 @@ impl BotMeter {
             Sim,
             "bots: window={} bots={bots} attempted[{}] denied[{}] primitives={} \
              routes done={} terminal={} cancelled={} discarded={} denied_slices={} \
-             age={} starve={} live_peak={} stuck_peak={} controller_us={}",
+             age={} starve={} live_peak={} stuck_peak={} controller_us={} \
+             astar new={} reused={} recycled={} cancelled={} grows={} retained_kib={} peak_kib={}",
             self.ticks,
             per(&self.queries.attempted),
             per(&self.queries.denied),
@@ -87,6 +93,13 @@ impl BotMeter {
             self.live_peak,
             self.stuck_peak,
             self.controller_us,
+            routes.astar_new,
+            routes.astar_reused,
+            routes.astar_recycled,
+            routes.astar_cancelled,
+            routes.astar_buffer_grows,
+            totals.astar_retained_bytes / 1024,
+            totals.astar_peak_bytes / 1024,
         );
         self.queries = QueryCounters::ZERO;
         self.controller_us = 0;
@@ -348,7 +361,7 @@ fn boot_bots(
         world
             .0
             .set_client_rank_prestige(bot.id, bot.rank, bot.prestige);
-        let index = default_class_index(seed, bot.id, bot.class_picks);
+        let index = bot.class_index.unwrap_or_else(|| crate::roster::match_class_index(seed, bot.id));
         let join_id = request_ids.allocate();
         let class_request = request_ids.allocate();
         let name_request = request_ids.allocate();
@@ -379,6 +392,7 @@ fn boot_bots(
             continue;
         }
         bot.joined = true;
+        bot.class_index = Some(index);
         bot.class_picks += 1;
         diag::info!(
             Sim,
@@ -516,6 +530,19 @@ fn think_bots(mut p: ThinkBots) {
     let mut controller_us = 0u64;
     let reservations = bot_goal_reservations(&p.roster);
     let seed = p.roster.seed;
+    // Stable per-snapshot allied ranks. This runs once, outside the bot loop.
+    let team_slots: Vec<_> = p.roster.bots.iter().filter_map(|bot| {
+        let meta = snapshot.meta.for_client(bot.id)?;
+        let mut allied: Vec<_> = p.roster.bots.iter().filter(|other| {
+            snapshot.meta.for_client(other.id).is_some_and(|m|
+                m.lifecycle == ClientLifecycle::Alive && m.client_state_team == meta.client_state_team)
+        }).map(|other| other.id.0).collect();
+        allied.sort_unstable();
+        Some((bot.id, crate::team::TeamSlot {
+            rank: allied.iter().position(|&id| id == bot.id.0).unwrap_or(0),
+            count: allied.len(),
+        }))
+    }).collect();
     for offset in 0..count {
         let bot = &mut p.roster.bots[(start + offset) % count];
         let Some(meta) = snapshot.meta.for_client(bot.id) else {
@@ -528,14 +555,17 @@ fn think_bots(mut p: ThinkBots) {
             continue;
         }
         if bot.class_picked_in != Some(meta.life_sequence) {
-            bot.class_picked_in = Some(meta.life_sequence);
-            let index = default_class_index(seed, bot.id, bot.class_picks);
+            let index = bot.class_index.unwrap_or_else(|| crate::roster::match_class_index(seed, bot.id));
             let request_id = p.request_ids.allocate();
             match p.actions.push(
                 bot.id,
                 ClientAction::ChooseDefaultClass { request_id, index },
             ) {
-                Ok(()) => bot.class_picks += 1,
+                Ok(()) => {
+                    bot.class_index = Some(index);
+                    bot.class_picked_in = Some(meta.life_sequence);
+                    bot.class_picks += 1;
+                },
                 Err(error) => diag::warn!(
                     Sim,
                     "bots: client {} class pick not queued — {error}",
@@ -564,6 +594,8 @@ fn think_bots(mut p: ThinkBots) {
                 continue;
             };
             let started = std::time::Instant::now();
+            brain.set_team_slot(team_slots.iter().find(|(id, _)| *id == bot.id)
+                .map(|(_, slot)| *slot).unwrap_or_default());
             let mut cmd = brain.drive_nav(
                 &obs,
                 &mut queried,
@@ -606,6 +638,13 @@ fn think_bots(mut p: ThinkBots) {
         routes.cancelled += stats.cancelled;
         routes.discarded_attachments += stats.discarded_attachments;
         routes.denied_slices += stats.denied_slices;
+        routes.astar_new = routes.astar_new.saturating_add(stats.astar_new);
+        routes.astar_reused = routes.astar_reused.saturating_add(stats.astar_reused);
+        routes.astar_recycled = routes.astar_recycled.saturating_add(stats.astar_recycled);
+        routes.astar_cancelled = routes.astar_cancelled.saturating_add(stats.astar_cancelled);
+        routes.astar_buffer_grows = routes.astar_buffer_grows.saturating_add(stats.astar_buffer_grows);
+        routes.astar_retained_bytes = routes.astar_retained_bytes.saturating_add(stats.astar_retained_bytes);
+        routes.astar_peak_bytes = routes.astar_peak_bytes.saturating_add(stats.astar_peak_bytes);
         let (bot_age, bot_starved) = brain.route_age();
         if bot_age != 0 {
             live += 1;
@@ -624,6 +663,7 @@ fn think_bots(mut p: ThinkBots) {
     meter.max_starved = meter.max_starved.max(starved);
     if meter.ticks >= METER_PERIOD_TICKS {
         meter.report(routes, count);
+        log_goal_congestion(&reservations);
         log_bot_snapshots(&p.roster, tick);
     }
 }
@@ -639,6 +679,27 @@ fn bot_goal_reservations(roster: &BotRoster) -> Vec<(sim::ClientId, [f32; 3])> {
             Some((bot.id, goal))
         })
         .collect()
+}
+
+/// Reports actual overlapping destinations, not just the aggregate cost.
+/// Grouping uses 3D distance so stacked floors do not appear congested.
+fn log_goal_congestion(reservations: &[(sim::ClientId, [f32; 3])]) {
+    const R2: f32 = 96.0 * 96.0;
+    let mut peak = 0usize;
+    let mut crowded = 0usize;
+    for (id, at) in reservations {
+        let size = reservations.iter().filter(|(_, other)| {
+            let dx = at[0] - other[0];
+            let dy = at[1] - other[1];
+            let dz = at[2] - other[2];
+            dx * dx + dy * dy + dz * dz < R2
+        }).count();
+        peak = peak.max(size);
+        if size >= 4 { crowded += 1; }
+        let _ = id;
+    }
+    diag::info!(Sim, "bots: goal_congestion peak_group={} bots_in_4plus={} reserved={}",
+        peak, crowded, reservations.len());
 }
 
 /// One line per bot every metering window (10 s), visible at the Normal log level
@@ -704,6 +765,13 @@ fn refresh_nav(world: &SimWorld, nav: &mut BotNav, load: Option<&assets::MapLoad
     {
         if let Some(graph) = future::block_on(future::poll_once(task)) {
             nav.graph = graph;
+            let a = nav::audit(&nav.graph);
+            diag::info!(Sim, "bots: nav_audit nodes={} edges={} walk={} drops={} glass={} isolated={} weak_components={} largest_component={} truncated={}", a.nodes, a.edges, a.walk_edges, a.drop_edges, a.glass_edges, a.isolated, a.weak_components, a.largest_component, nav.graph.truncated);
+            if let Ok(dir) = std::env::var("IW4_NAV_AUDIT_DIR") {
+                if let Err(error) = nav::export_audit_csv(&nav.graph, std::path::Path::new(&dir)) {
+                    diag::warn!(Sim, "bots: nav_audit export failed: {error}");
+                }
+            }
             // The bake is only navigation once this graph is the one the bots
             // will read, which is here and not on the worker.
             if let Some(stage) = stage.take() {
@@ -779,6 +847,9 @@ fn navigation_for(world: &mut SimWorld, digest: u64) -> NavGraph {
             graph.drops,
             if graph.truncated { ", truncated" } else { "" }
         );
+        let stats = graph.allocation_stats();
+        diag::info!(Sim, "bots: nav memory nodes={} edges={} adj_kib={} unused_slots={}",
+            stats.nodes, stats.edges, stats.estimated_adjacency_bytes / 1024, stats.wasted_edge_slots);
         return graph;
     }
     let started = std::time::Instant::now();
@@ -789,6 +860,9 @@ fn navigation_for(world: &mut SimWorld, digest: u64) -> NavGraph {
         "bots: navigation prepared in {:.1}ms on worker",
         started.elapsed().as_secs_f64() * 1000.0
     );
+    let stats = graph.allocation_stats();
+    diag::info!(Sim, "bots: nav memory nodes={} edges={} adj_kib={} unused_slots={}",
+        stats.nodes, stats.edges, stats.estimated_adjacency_bytes / 1024, stats.wasted_edge_slots);
     if let Err(error) = assets::cache_put(NAV_CACHE_KIND, &key, &graph.cache_encode()) {
         diag::warn!(Sim, "bots: navigation cache store {key}: {error}");
     }
