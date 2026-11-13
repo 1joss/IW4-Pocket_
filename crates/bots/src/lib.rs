@@ -4,6 +4,7 @@ mod intent;
 mod memory;
 mod motor;
 mod nav;
+mod nav_audit_v6;
 mod observation;
 mod plugin;
 mod query;

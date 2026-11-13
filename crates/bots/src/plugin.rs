@@ -767,9 +767,19 @@ fn refresh_nav(world: &SimWorld, nav: &mut BotNav, load: Option<&assets::MapLoad
             nav.graph = graph;
             let a = nav::audit(&nav.graph);
             diag::info!(Sim, "bots: nav_audit nodes={} edges={} walk={} drops={} glass={} isolated={} weak_components={} largest_component={} truncated={}", a.nodes, a.edges, a.walk_edges, a.drop_edges, a.glass_edges, a.isolated, a.weak_components, a.largest_component, nav.graph.truncated);
-            if let Ok(dir) = std::env::var("IW4_NAV_AUDIT_DIR") {
-                if let Err(error) = nav::export_audit_csv(&nav.graph, std::path::Path::new(&dir)) {
-                    diag::warn!(Sim, "bots: nav_audit export failed: {error}");
+            // V6: export once per graph load, including cache hits. On iOS the
+            // audit goes into Documents/NavAudit/<graph digest>/ for retrieval.
+            // Desktop builds remain opt-in via IW4_NAV_AUDIT_DIR.
+            if let Some(dir) = navigation_audit_directory(nav.graph.digest) {
+                let spawns = world.authored_spawn_origins();
+                let objectives: Vec<[f32; 3]> = world.objectives.compass.iter()
+                    .map(|objective| objective.origin).collect();
+                if let Err(error) = crate::nav_audit_v6::export(
+                    &nav.graph, &dir, &spawns, &objectives,
+                ) {
+                    diag::warn!(Sim, "bots: nav_audit V6 export failed: {error}");
+                } else {
+                    diag::info!(Sim, "bots: nav_audit V6 exported to {}", dir.display());
                 }
             }
             // The bake is only navigation once this graph is the one the bots
@@ -806,6 +816,21 @@ fn refresh_nav(world: &SimWorld, nav: &mut BotNav, load: Option<&assets::MapLoad
         stage,
     ));
     false
+}
+
+/// A digest-specific directory prevents subsequent map loads overwriting data.
+/// IW4_NAV_AUDIT_DIR overrides the automatic iOS Documents location.
+fn navigation_audit_directory(digest: u64) -> Option<std::path::PathBuf> {
+    let root = std::env::var_os("IW4_NAV_AUDIT_DIR")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            #[cfg(target_os = "ios")]
+            { std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("Documents").join("NavAudit")) }
+            #[cfg(not(target_os = "ios"))]
+            { None }
+        })?;
+    Some(root.join(format!("{digest:016x}")))
 }
 
 const NAV_CACHE_KIND: &str = "nav";
