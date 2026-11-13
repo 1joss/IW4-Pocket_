@@ -1,3 +1,6 @@
+mod comparison;
+mod recompiled;
+pub use comparison::BotMode;
 mod controller;
 mod intent;
 mod memory;

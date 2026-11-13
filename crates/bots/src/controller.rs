@@ -35,6 +35,9 @@ const FIGHT_SCAN_MAX_AGE_TICKS: u32 = 8;
 const FIGHT_COMMIT_MAX_AGE_TICKS: u32 = 60;
 /// Commanded movement without displacement for this long is a stuck bot.
 const STUCK_TICKS: u32 = 40;
+const ROUTE_RETRY_TICKS: u32 = 24;
+const FIGHT_REPOSITION_TICKS: u32 = 100;
+const FAILED_GOAL_RADIUS: f32 = 72.0;
 const GOAL_RESERVATION_RADIUS: f32 = 96.0;
 const GOAL_RESERVATION_PENALTY: f32 = 24.0;
 
@@ -60,6 +63,9 @@ pub struct HostController {
     nav_key: Option<(u64, u64, u32, u32)>,
     roam: Option<[f32; 3]>,
     roam_gen: u32,
+    failed_goals: Vec<([f32; 3], u32)>,
+    route_blocked_since: Option<u32>,
+    fight_hold_since: Option<u32>,
     decision: Decision,
     prev_seen: Vec<ClientId>,
     was_touching: bool,
@@ -96,6 +102,9 @@ impl HostController {
             nav_key: None,
             roam: None,
             roam_gen: 0,
+            failed_goals: Vec::new(),
+            route_blocked_since: None,
+            fight_hold_since: None,
             decision: Decision::default(),
             prev_seen: Vec::new(),
             was_touching: false,
@@ -115,6 +124,7 @@ impl HostController {
         self.fight_scan = None;
         self.committed.clear();
         self.route_goal = None;
+        self.route_blocked_since = None;
     }
 
     pub fn decision(&self) -> Decision {
@@ -200,6 +210,8 @@ impl HostController {
             self.cancel_navigation();
             self.weapon.reset();
             self.roam = None;
+            self.failed_goals.clear();
+            self.fight_hold_since = None;
             self.memory = Memory::default();
             self.prev_seen.clear();
             self.was_touching = false;
@@ -267,7 +279,22 @@ impl HostController {
                 }
             }
         }
-        let cmd = self.motor.drive(obs, &self.intent, dt_ms);
+        let mut cmd = self.motor.drive(obs, &self.intent, dt_ms);
+        // Authored waypoint actions belong to the destination, as in Recompiled.
+        // Do not apply them to an escape or combat intent off the committed route.
+        if let Some(step) = self.committed.first()
+            && self.intent.move_goal == Some(step.position)
+            && self.intent.move_mode == MoveMode::Walk
+        {
+            match step.kind {
+                nav::TraversalKind::Crouch => {
+                    cmd.buttons &= !playerstate_iw4::buttons::SPRINT;
+                    cmd.buttons |= playerstate_iw4::buttons::CROUCH;
+                }
+                nav::TraversalKind::Climb => cmd.buttons |= playerstate_iw4::buttons::JUMP,
+                _ => {}
+            }
+        }
         self.report = self.motor.report(obs, &self.intent, &cmd);
         self.last_cmd = cmd;
         cmd
@@ -708,8 +735,10 @@ impl HostController {
             path,
             PathOutcome::Blocked | PathOutcome::Unreachable | PathOutcome::IncompleteGraph
         ) {
+            self.remember_failed_goal(goal, obs.tick);
             self.roam = None;
             self.committed.clear();
+            self.route_goal = None;
         }
         BotIntent {
             look_at: Some([goal[0], goal[1], obs.eye()[2]]),
@@ -732,6 +761,7 @@ impl HostController {
         }
         self.roam_gen = self.roam_gen.saturating_add(1);
         let salt = obs.self_state.id.0 ^ self.roam_gen;
+        self.failed_goals.retain(|(_, until)| *until > obs.tick);
         let next = if let Some(graph) = nav.filter(|graph| !graph.is_empty()) {
             let mut best = None;
             for attempt in 0..4u32 {
@@ -742,6 +772,13 @@ impl HostController {
                 ) else {
                     break;
                 };
+                if self
+                    .failed_goals
+                    .iter()
+                    .any(|(bad, _)| dist_xy(*bad, candidate) < FAILED_GOAL_RADIUS)
+                {
+                    continue;
+                }
                 let penalty = reservation_penalty(obs.self_state.id, candidate, &self.reservations);
                 if penalty == 0.0 {
                     best = Some(candidate);
@@ -966,11 +1003,19 @@ impl HostController {
         let target_id = contact.id;
         world.enter(QuerySubsystem::Tactical);
         if shot.is_err() {
-            return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(here));
+            return self.pending_movement(here);
         }
         // Already in range with a line of fire: this is the position.
         if in_hold && shot_allowed(shot, target_id) {
-            return (MoveMode::Hold, PathOutcome::Clear, Some(here));
+            let since = *self.fight_hold_since.get_or_insert(obs.tick);
+            if obs.tick.saturating_sub(since) < FIGHT_REPOSITION_TICKS {
+                return (MoveMode::Hold, PathOutcome::Clear, Some(here));
+            }
+            // Re-evaluate supports periodically, but don't force a blind move.
+            self.fight_hold_since = Some(obs.tick);
+            self.fight_scan = None;
+        } else {
+            self.fight_hold_since = None;
         }
         let hold = self.hold_range(obs);
         // The engagement, not the two exact coordinates: a threat that shifts a
@@ -1078,7 +1123,10 @@ impl HostController {
             // caller resume another goal when every firing position failed; out
             // of range, close on the engagement's anchor — a destination that
             // does not move with every observation and invalidate its own search.
-            if in_hold || denied {
+            if denied {
+                return self.pending_movement(here);
+            }
+            if in_hold {
                 return (MoveMode::Hold, path, Some(here));
             }
             return self.route(here, anchor, world, nav, astar_budget);
@@ -1120,8 +1168,9 @@ impl HostController {
                 .collect();
         }
         candidates.sort_by(|a, b| {
-            reservation_penalty(obs.self_state.id, *a, &self.reservations)
-                .total_cmp(&reservation_penalty(obs.self_state.id, *b, &self.reservations))
+            reservation_penalty(obs.self_state.id, *a, &self.reservations).total_cmp(
+                &reservation_penalty(obs.self_state.id, *b, &self.reservations),
+            )
         });
         candidates
     }
@@ -1210,6 +1259,33 @@ impl HostController {
         }
     }
 
+    fn remember_failed_goal(&mut self, goal: [f32; 3], tick: u32) {
+        self.failed_goals.retain(|(_, until)| *until > tick);
+        self.failed_goals.push((goal, tick.saturating_add(240)));
+        if self.failed_goals.len() > 12 {
+            self.failed_goals.remove(0);
+        }
+    }
+
+    // Query-budget denial isn't evidence of a wall. Retain only an existing
+    // clear, walking waypoint; never infer that an unvalidated step is safe.
+    fn pending_movement(&self, here: [f32; 3]) -> (MoveMode, PathOutcome, Option<[f32; 3]>) {
+        if self.intent.path == PathOutcome::Clear
+            && matches!(self.intent.move_mode, MoveMode::Walk | MoveMode::Drop)
+            && self
+                .intent
+                .move_goal
+                .is_some_and(|goal| dist2(here, goal) > WAYPOINT_IN * WAYPOINT_IN)
+        {
+            return (
+                self.intent.move_mode,
+                PathOutcome::Clear,
+                self.intent.move_goal,
+            );
+        }
+        (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(here))
+    }
+
     fn route(
         &mut self,
         from: [f32; 3],
@@ -1255,7 +1331,14 @@ impl HostController {
                     return (MoveMode::Hold, PathOutcome::IncompleteGraph, Some(to));
                 }
                 Err(PathError::BudgetExhausted { .. }) => {
-                    return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(to));
+                    if self.committed.is_empty()
+                        || self
+                            .route_goal
+                            .is_none_or(|goal| dist2(goal, to) > WAYPOINT_IN * WAYPOINT_IN)
+                    {
+                        return (MoveMode::Hold, PathOutcome::BudgetExhausted, Some(to));
+                    }
+                    // Existing route has the same goal; keep executing its verified steps.
                 }
                 Err(
                     PathError::GraphChanged
@@ -1296,27 +1379,48 @@ impl HostController {
         let Some(step) = self.committed.first().copied() else {
             return (MoveMode::Hold, PathOutcome::Clear, Some(from));
         };
-        let sample = if step.kind == nav::TraversalKind::Drop {
+        // CSV special links are authored movement instructions. A standing
+        // straight-line check cannot validate a crouch passage or a jump arc;
+        // execute the action and let normal collision physics constrain it.
+        let sample = if matches!(
+            step.kind,
+            nav::TraversalKind::Crouch | nav::TraversalKind::Climb
+        ) {
+            Ok(WalkSample::Clear)
+        } else if step.kind == nav::TraversalKind::Drop {
             nav::drop_clear(world, from, step.position)
         } else {
             world.walk_hull(from, step.position)
         };
         match sample {
-            Ok(WalkSample::Clear) => (
-                if step.kind == nav::TraversalKind::Drop {
-                    MoveMode::Drop
-                } else {
-                    MoveMode::Walk
-                },
-                PathOutcome::Clear,
-                Some(step.position),
-            ),
+            Ok(WalkSample::Clear) => {
+                self.route_blocked_since = None;
+                (
+                    if step.kind == nav::TraversalKind::Drop {
+                        MoveMode::Drop
+                    } else {
+                        MoveMode::Walk
+                    },
+                    PathOutcome::Clear,
+                    Some(step.position),
+                )
+            }
             Ok(WalkSample::BreakGlass) => (
                 MoveMode::BreakGlass,
                 PathOutcome::Clear,
                 Some(step.position),
             ),
-            Ok(WalkSample::Blocked) => (MoveMode::Hold, PathOutcome::Blocked, Some(step.position)),
+            Ok(WalkSample::Blocked) => {
+                let attempts = self.route_blocked_since.get_or_insert(0);
+                *attempts = attempts.saturating_add(1);
+                if *attempts >= ROUTE_RETRY_TICKS / THINK_PERIOD_TICKS {
+                    self.committed.clear();
+                    self.route_goal = None;
+                    self.route_work.cancel();
+                    self.route_blocked_since = None;
+                }
+                (MoveMode::Hold, PathOutcome::Blocked, Some(step.position))
+            }
             Err(_) => (
                 MoveMode::Hold,
                 PathOutcome::BudgetExhausted,
@@ -1626,7 +1730,11 @@ fn side_step_targets(from: [f32; 3], to: [f32; 3]) -> [[f32; 3]; 3] {
             from[1] + STEP_IN * (forward[1] - forward[0]) * diagonal,
             from[2],
         ],
-        [from[0] - STEP_IN * forward[0], from[1] - STEP_IN * forward[1], from[2]],
+        [
+            from[0] - STEP_IN * forward[0],
+            from[1] - STEP_IN * forward[1],
+            from[2],
+        ],
     ]
 }
 

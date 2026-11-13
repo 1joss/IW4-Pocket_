@@ -7,7 +7,7 @@ use sim::{ClientId, SimBrush};
 use crate::observation::ModeObjective;
 use crate::query::{HullTrace, QueryResult, QuerySubsystem, SightSample, WalkSample, WorldQuery};
 
-pub const NAV_SCHEMA: u32 = 9;
+pub const NAV_SCHEMA: u32 = 11;
 pub const GRID_IN: f32 = 48.0;
 pub const SNAP_IN: f32 = 256.0;
 pub const STEP_Z_IN: f32 = 18.0;
@@ -37,6 +37,8 @@ pub enum TraversalKind {
     Walk,
     Drop,
     BreakGlass,
+    Crouch,
+    Climb,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -79,6 +81,8 @@ impl TraversalKind {
             Self::Walk => 0,
             Self::Drop => 1,
             Self::BreakGlass => 2,
+            Self::Crouch => 3,
+            Self::Climb => 4,
         }
     }
 
@@ -87,6 +91,8 @@ impl TraversalKind {
             0 => Some(Self::Walk),
             1 => Some(Self::Drop),
             2 => Some(Self::BreakGlass),
+            3 => Some(Self::Crouch),
+            4 => Some(Self::Climb),
             _ => None,
         }
     }
@@ -426,7 +432,14 @@ fn column_floors(
                     ) else {
                         return false;
                     };
-                    hit.startsolid || hit.fraction >= 1.0 || hit.normal[2] < 0.7
+                    // A neighbouring sample can have perfectly walkable ground
+                    // at a different height. Treat that as a refinement boundary
+                    // so narrow stair treads and ramp transitions receive the
+                    // 24-unit samples, not just cliffs and solid obstacles.
+                    hit.startsolid
+                        || hit.fraction >= 1.0
+                        || hit.normal[2] < 0.7
+                        || (hit.endpos[2] - feet[2]).abs() > STEP_Z_IN * 0.5
                 });
         floors.push(Floor {
             feet,
@@ -607,7 +620,11 @@ pub fn bake_seeded(
                 continue;
             }
             let dz = (a[2] - b[2]).abs();
-            if dz > STEP_Z_IN.max(planar * 0.75) {
+            // Do not infer walkability from elevation alone: the continuous
+            // support probe below validates every intermediate floor sample.
+            // Allow steeper candidates at short range so the refined stair
+            // samples can actually connect. A rejected candidate adds no edge.
+            if dz > STEP_Z_IN.max(planar) {
                 continue;
             }
             let kind = match supported_walk(&mut probe, a, b) {
@@ -734,7 +751,7 @@ fn link_drops(
     drops
 }
 
-fn label_components(n: usize, adj: &[Vec<NavEdge>]) -> Vec<u16> {
+pub(crate) fn label_components(n: usize, adj: &[Vec<NavEdge>]) -> Vec<u16> {
     let mut links = vec![Vec::new(); n];
     for (i, edges) in adj.iter().enumerate() {
         for e in edges {
@@ -803,8 +820,12 @@ pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]
         h = (h ^ (h >> 16)).wrapping_mul(0x85eb_ca6b);
         h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
         h ^= h >> 16;
-        if best.is_none_or(|(best_h, _)| h >= best_h) {
-            best = Some((h, *pos));
+        // Preserve per-bot variety while discouraging the shortest patrols.
+        // The upper bits of the hash remain the primary selection criterion;
+        // a modest distance bonus breaks ties in favour of wider patrols.
+        let score = (h >> 4).saturating_add((planar as u32).saturating_mul(4096));
+        if best.is_none_or(|(best_h, _)| score >= best_h) {
+            best = Some((score, *pos));
         }
     }
     best.map(|(_, pos)| pos).or(fallback)

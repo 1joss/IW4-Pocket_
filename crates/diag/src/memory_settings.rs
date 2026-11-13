@@ -256,6 +256,7 @@ pub fn valid_file_setting(name: &str, value: &str) -> bool {
         // Startup commands for iOS (no console there), e.g. `map mp_rust; bot add 5`.
         "IW4L_CMDS" => valid_startup_cmds(value),
         // Bots added to every hosted match; the console's `bot add` needs a keyboard.
+        "IW4L_BOT_MODE" => matches!(value, "pocket" | "waypoints" | "recompiled"),
         "IW4L_BOTS" => value.parse::<u32>().is_ok_and(|n| n <= 17),
         _ => false,
     }

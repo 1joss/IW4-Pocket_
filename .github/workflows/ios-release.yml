@@ -2,11 +2,6 @@ name: ios-release
 # Manual only: nothing runs on push, so no build is wasted.
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to publish (e.g. v0.1.0-alpha). Empty = build only, upload as artifact."
-        required: false
-        default: ""
 permissions:
   contents: write
   actions: write
@@ -17,13 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
           
-      - name: Apply bot navigation patches
+      - name: Verify comparison controllers
         run: |
-          git apply --check iw4-pocket-bot-navigation-p0-p2.patch
-          git apply iw4-pocket-bot-navigation-p0-p2.patch
-
-          git apply --check iw4-pocket-bot-vertical-traversal-v1.patch
-          git apply iw4-pocket-bot-vertical-traversal-v1.patch
+          python3 tools/test_bot_comparison.py
       - run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-ios
       - name: Test memory controls and package contracts
         run: |
@@ -60,29 +51,18 @@ jobs:
           cp ios/Info.plist Payload/IW4L.app/Info.plist
           cp ios/icons/AppIcon60x60* ios/icons/AppIcon76x76* ios/icons/AppIcon83.5x83.5* Payload/IW4L.app/
           file Payload/IW4L.app/iw4l
-          zip -qr "IW4 Pocket.ipa" Payload
-          ls -lh "IW4 Pocket.ipa"
+          zip -qr "IW4 Bot Compare.ipa" Payload
+          ls -lh "IW4 Bot Compare.ipa"
       - name: Verify packaged IPA before publication
-        run: python3 tools/verify_ios_ipa.py "IW4 Pocket.ipa" --report ipa-verification.json
+        run: python3 tools/verify_ios_ipa.py "IW4 Bot Compare.ipa" --report ipa-verification.json
+      - name: Archive corresponding comparison source
+        run: git archive --format=zip --output=IW4-Bot-Compare-source.zip HEAD
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: IW4L-ipa
+          name: IW4-Bot-Compare-ipa
           path: |
-            IW4 Pocket.ipa
+            IW4 Bot Compare.ipa
             build.log
             ipa-verification.json
-      - name: Publish release
-        if: ${{ inputs.tag != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          gh release create "$RELEASE_TAG" "IW4 Pocket.ipa" ipa-verification.json \
-            --target "$GITHUB_SHA" \
-            --title "IW4 Pocket $RELEASE_TAG" \
-            --prerelease \
-            --notes-file RELEASE_NOTES.md
-          # A release made with this token cannot start other workflows by itself, but a
-          # direct dispatch is allowed: SideStore's source.json follows the new release.
-          gh workflow run update-source.yml --ref main -f tag="$RELEASE_TAG"
+            IW4-Bot-Compare-source.zip

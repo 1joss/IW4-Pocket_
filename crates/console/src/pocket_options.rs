@@ -25,6 +25,11 @@ pub(crate) struct Opt {
 /// Keep in step with `OPTIONS` in tools/gen_pocket_menu.py (a test checks this).
 pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
+        dvar: "ui_pocket_botmode",
+        env: "IW4L_BOT_MODE",
+        map: &[("auto", None), ("pocket", Some("pocket")), ("waypoints", Some("waypoints")), ("recompiled", Some("recompiled"))],
+    },
+    Opt {
         dvar: "ui_pocket_tier",
         env: diag::memory_settings::TIER_ENV,
         map: &[("auto", None), ("low", Some("low")), ("mid", Some("mid")), ("high", Some("high"))],

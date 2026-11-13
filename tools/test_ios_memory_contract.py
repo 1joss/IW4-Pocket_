@@ -21,7 +21,7 @@ class Contract(unittest.TestCase):
         self.assertEqual(plist["CFBundleVersion"], "24")
         # The label shown in the main menu is the release name.
         self.assertIn('const APP_LABEL: &str = "0.4.0";', text("crates/launcher/src/main.rs"))
-        self.assertEqual(plist["CFBundleIdentifier"], "com.markussela.iw4l")
+        self.assertEqual(plist["CFBundleIdentifier"], "com.1joss.iw4pocket.botcomparison")
         lock = re.search(r'name = "launcher"\nversion = "([^"]+)"', text("Cargo.lock"))
         self.assertIsNotNone(lock)
         self.assertEqual(lock.group(1), cargo)
@@ -50,9 +50,10 @@ class Contract(unittest.TestCase):
         wf = text(".github/workflows/ios-release.yml")
         verify = wf.index("tools/verify_ios_ipa.py")
         self.assertLess(verify, wf.index("actions/upload-artifact"))
-        self.assertLess(verify, wf.index("gh release create"))
+        self.assertNotIn("gh release create", wf)
+        self.assertNotIn("update-source.yml", wf)
         self.assertIn("--profile ios", wf)
-        self.assertIn("$GITHUB_SHA", wf)
+        self.assertIn("IW4 Bot Compare.ipa", wf)
         self.assertNotIn('IW4L_BUILD_NUMBER: "1"', wf)
         self.assertIn("/usr/libexec/PlistBuddy", wf)
         self.assertIn("Print :CFBundleVersion", wf)
@@ -73,8 +74,8 @@ class Contract(unittest.TestCase):
         # release workflow starts this one itself, after publishing and with the tag.
         build = text(".github/workflows/ios-release.yml")
         self.assertIn("actions: write", build)
-        self.assertGreater(build.index("gh workflow run update-source.yml"), build.index("gh release create"))
-        self.assertIn('-f tag="$RELEASE_TAG"', build)
+        self.assertNotIn("gh workflow run update-source.yml", build)
+        self.assertNotIn("gh release create", build)
         self.assertIn("inputs.tag", wf)
         # The tag comes from an input the workflow does not control: it goes through env,
         # never straight into the shell text.

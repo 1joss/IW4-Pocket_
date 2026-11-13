@@ -12,6 +12,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKERS = (
+    b"IW4L_BOT_MODE", b"Pocket + BW routes", b"Recompiled + BW routes",
     b"IW4L_FPV_RETAIN_MIB", b"IW4L_SHADER_WORKERS", b"IW4L_MOVE_IMAGES",
     b"optional FPV next-map cache", b"cumulative traffic (not live)",
     b"iw4l-memory-settings.txt", b"device tier:", b"IW4L_RESIDENT_MAP", b"IW4L_IOS_BC", b"heap net growth per asset kind", b"RENDER ERROR", b"IW4L_FRAME_LATENCY", b"IW4L_PROMOTION", b"idle timer:", b"frame pacing:",
@@ -73,7 +74,7 @@ def verify(path):
     with zipfile.ZipFile(path) as archive:
         prefix = "Payload/IW4L.app/"
         info = plistlib.loads(archive.read(prefix + "Info.plist"))
-        require(info["CFBundleIdentifier"] == "com.markussela.iw4l", "bundle identifier changed")
+        require(info["CFBundleIdentifier"] == "com.1joss.iw4pocket.botcomparison", "bundle identifier changed")
         require(info["CFBundleShortVersionString"] == version.split("-", 1)[0], "launcher and plist versions differ")
         require(info == expected, "packaged plist differs from source")
         binary = archive.read(prefix + info["CFBundleExecutable"])

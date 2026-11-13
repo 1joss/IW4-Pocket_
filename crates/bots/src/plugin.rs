@@ -38,6 +38,7 @@ struct BotNav {
 struct BotMeter {
     queries: QueryCounters,
     controller_us: u64,
+    recompiled_sight_calls: u64,
     ticks: u32,
     stuck_peak: usize,
     live_peak: usize,
@@ -88,6 +89,12 @@ impl BotMeter {
             self.stuck_peak,
             self.controller_us,
         );
+        diag::info!(
+            Sim,
+            "bots: Recompiled sight_calls={}",
+            self.recompiled_sight_calls
+        );
+        self.recompiled_sight_calls = 0;
         self.queries = QueryCounters::ZERO;
         self.controller_us = 0;
         self.ticks = 0;
@@ -108,6 +115,7 @@ impl Plugin for BotsPlugin {
             .init_resource::<BotTpQueue>()
             .init_resource::<BotFireQueue>()
             .init_resource::<BotNav>()
+            .insert_resource(crate::comparison::BotMode::from_env())
             .init_resource::<BotNavigationReady>()
             .init_resource::<BotMeter>()
             .init_resource::<BotAutoFill>()
@@ -278,9 +286,20 @@ fn drain_bot_add_queue(
             request.dummy,
             added.iter().map(|id| id.0).collect::<Vec<_>>()
         );
-        let names: Vec<(u32, &str)> = roster.bots.iter().filter(|b| added.contains(&b.id)).map(|b| (b.id.0, b.name)).collect();
+        let names: Vec<(u32, &str)> = roster
+            .bots
+            .iter()
+            .filter(|b| added.contains(&b.id))
+            .map(|b| (b.id.0, b.name))
+            .collect();
         let refusal = (added.len() < count as usize).then_some("roster full");
-        diag::events::bots_event(count, added.len() as u32, roster.bots.len() as u32, refusal, &names);
+        diag::events::bots_event(
+            count,
+            added.len() as u32,
+            roster.bots.len() as u32,
+            refusal,
+            &names,
+        );
     }
 }
 
@@ -301,7 +320,11 @@ fn evict_bots_claiming_local_client(
     if bot.joined {
         let request_id = request_ids.allocate();
         if let Err(error) = actions.push(bot.id, ClientAction::LeaveMatch { request_id }) {
-            diag::warn!(Sim, "bots: client {} leave was not queued: {error}", bot.id.0);
+            diag::warn!(
+                Sim,
+                "bots: client {} leave was not queued: {error}",
+                bot.id.0
+            );
         }
     }
     if let Some(mut world) = world {
@@ -484,6 +507,7 @@ struct ThinkBots<'w> {
     clock: Res<'w, AuthorityClock>,
     world: ResMut<'w, AuthorityWorld>,
     nav: Res<'w, BotNav>,
+    mode: Res<'w, crate::comparison::BotMode>,
     roster: ResMut<'w, BotRoster>,
     cmds: ResMut<'w, ClientCommandInbox>,
     actions: ResMut<'w, ClientActionInbox>,
@@ -514,6 +538,7 @@ fn think_bots(mut p: ThinkBots) {
     let count = p.roster.bots.len();
     let start = (p.clock.tick as usize / 2) % count.max(1);
     let mut controller_us = 0u64;
+    let mut recompiled_sight_calls = 0u64;
     let reservations = bot_goal_reservations(&p.roster);
     let seed = p.roster.seed;
     for offset in 0..count {
@@ -522,12 +547,18 @@ fn think_bots(mut p: ThinkBots) {
             continue;
         };
         if meta.lifecycle != ClientLifecycle::Alive {
+            if *p.mode == crate::BotMode::Recompiled {
+                crate::recompiled::dead(bot.id.0);
+            }
             if let Some(brain) = bot.brain.as_mut() {
                 brain.cancel_navigation();
             }
             continue;
         }
         if bot.class_picked_in != Some(meta.life_sequence) {
+            if *p.mode == crate::BotMode::Recompiled {
+                crate::recompiled::dead(bot.id.0);
+            }
             bot.class_picked_in = Some(meta.life_sequence);
             let index = default_class_index(seed, bot.id, bot.class_picks);
             let request_id = p.request_ids.allocate();
@@ -556,6 +587,24 @@ fn think_bots(mut p: ThinkBots) {
                 weapon_mapped: ps.weapon as u16,
                 ..playerstate_iw4::UserCmd::default()
             }
+        } else if *p.mode != crate::BotMode::Pocket && p.nav.graph.is_empty() {
+            // Unsupported map: stay idle and report missing coverage, never
+            // silently substitute Pocket navigation under a comparison label.
+            playerstate_iw4::UserCmd {
+                server_time: p.clock.time_ms,
+                ..Default::default()
+            }
+        } else if *p.mode == crate::BotMode::Recompiled {
+            // Preserve the upstream controller's visibility/steering cadence.
+            // Its work is measured separately; imposing our shared 96-query
+            // budget would change its decisions when a callback was denied.
+            let started = std::time::Instant::now();
+            let (cmd, calls) =
+                crate::recompiled::think(bot.id, &snapshot, &mut p.world.0, p.clock.time_ms)
+                    .unwrap_or_default();
+            recompiled_sight_calls += u64::from(calls);
+            controller_us += started.elapsed().as_micros() as u64;
+            cmd
         } else if let Some(brain) = bot.brain.as_mut() {
             let mut queried = Budgeted::new(&mut p.world.0, &mut budget);
             let Some(obs) =
@@ -617,14 +666,18 @@ fn think_bots(mut p: ThinkBots) {
     let meter = &mut p.meter;
     meter.queries.merge(&budget.counters);
     meter.controller_us += controller_us;
+    meter.recompiled_sight_calls += recompiled_sight_calls;
     meter.ticks += 1;
     meter.stuck_peak = meter.stuck_peak.max(stuck);
     meter.live_peak = meter.live_peak.max(live);
     meter.max_age = meter.max_age.max(age);
     meter.max_starved = meter.max_starved.max(starved);
     if meter.ticks >= METER_PERIOD_TICKS {
+        diag::info!(Sim, "bots: comparison mode={}", p.mode.label());
         meter.report(routes, count);
-        log_bot_snapshots(&p.roster, tick);
+        if *p.mode != crate::BotMode::Recompiled {
+            log_bot_snapshots(&p.roster, tick);
+        }
     }
 }
 
@@ -661,7 +714,9 @@ fn log_bot_snapshots(roster: &BotRoster, tick: u32) {
             pos[2],
             task.kind,
             task.reason,
-            intent.move_goal.map(|g| [g[0].round(), g[1].round(), g[2].round()]),
+            intent
+                .move_goal
+                .map(|g| [g[0].round(), g[1].round(), g[2].round()]),
             intent.path,
             brain.stuck(tick),
             brain.report(),
@@ -677,6 +732,7 @@ fn prepare_navigation(
     mut nav: ResMut<BotNav>,
     mut ready: ResMut<BotNavigationReady>,
     load: Option<Res<assets::MapLoadProcess>>,
+    mode: Res<crate::comparison::BotMode>,
 ) {
     ready.0 = frame::WorldReadiness::new(*generation, frame::ReadinessState::Pending);
     if !matches!(*role, RuntimeRole::Listen | RuntimeRole::Dedicated) {
@@ -689,6 +745,52 @@ fn prepare_navigation(
     let Some(world) = world else {
         return;
     };
+    if *mode != crate::BotMode::Pocket {
+        let Some(load) = load.as_deref() else {
+            return;
+        };
+        let digest = nav_digest(&world.0);
+        if nav.graph.digest != digest || nav.graph.generation != generation.0.unwrap_or(0) {
+            let text = crate::comparison::csv(&load.zone);
+            let graph = text
+                .ok_or_else(|| format!("no bundled waypoints for {}", load.zone))
+                .and_then(|text| crate::comparison::parse(text, digest, generation.0.unwrap_or(0)));
+            nav.graph = match graph {
+                Ok(graph) => {
+                    diag::info!(
+                        Sim,
+                        "bots: comparison mode={} map={} nodes={}",
+                        mode.label(),
+                        load.zone,
+                        graph.nodes.len()
+                    );
+                    if *mode == crate::BotMode::Recompiled
+                        && !crate::recompiled::reset(&load.zone, text.unwrap())
+                    {
+                        diag::error!(Sim, "bots: Recompiled adapter failed to load waypoints");
+                        NavGraph {
+                            digest,
+                            generation: generation.0.unwrap_or(0),
+                            ..Default::default()
+                        }
+                    } else {
+                        graph
+                    }
+                }
+                Err(error) => {
+                    diag::error!(Sim, "bots: comparison unavailable: {error}; bots held idle");
+                    NavGraph {
+                        digest,
+                        generation: generation.0.unwrap_or(0),
+                        ..Default::default()
+                    }
+                }
+            };
+            nav.pending = None;
+        }
+        ready.0.state = frame::ReadinessState::Ready;
+        return;
+    }
     if refresh_nav(&world.0, &mut nav, load.as_deref()) {
         ready.0.state = frame::ReadinessState::Ready;
     }
