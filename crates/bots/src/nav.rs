@@ -69,6 +69,17 @@ pub struct NavGraph {
     pub component_links: Vec<Vec<u16>>,
 }
 
+
+/// Approximate heap cost of adjacency storage, excluding allocator metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphAllocationStats {
+    pub nodes: usize,
+    pub edges: usize,
+    pub reserved_edges: usize,
+    pub estimated_adjacency_bytes: usize,
+    pub wasted_edge_slots: usize,
+}
+
 /// Layout tag for the blob below. The bake's own [`NAV_SCHEMA`] and
 /// [`NAV_HULL`] travel inside it, so only a change to the packing itself
 /// belongs here.
@@ -101,6 +112,21 @@ impl TraversalKind {
 impl NavGraph {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    /// Cheap, actionable allocation diagnostics. Call on graph load, not per bot/tick.
+    pub fn allocation_stats(&self) -> GraphAllocationStats {
+        let edges = self.adj.iter().map(Vec::len).sum::<usize>();
+        let reserved_edges = self.adj.iter().map(Vec::capacity).sum::<usize>();
+        let row_bytes = self.adj.capacity() * std::mem::size_of::<Vec<NavEdge>>();
+        let edge_bytes = reserved_edges * std::mem::size_of::<NavEdge>();
+        GraphAllocationStats {
+            nodes: self.nodes.len(),
+            edges,
+            reserved_edges,
+            estimated_adjacency_bytes: row_bytes.saturating_add(edge_bytes),
+            wasted_edge_slots: reserved_edges.saturating_sub(edges),
+        }
     }
 
     /// The graph is a flat table of nodes and edges, so it stores as one blob.
@@ -188,6 +214,7 @@ impl NavGraph {
                 }
                 row.push(NavEdge { to, cost, kind });
             }
+            row.shrink_to_fit();
             adj.push(row);
         }
         // Component ids are only ever compared, never used as an index, so they
@@ -204,6 +231,7 @@ impl NavGraph {
                 }
                 row.push(link);
             }
+            row.shrink_to_fit();
             component_links.push(row);
         }
         (at == blob.len() && nodes.iter().flatten().all(|v| v.is_finite())).then_some(Self {
@@ -666,6 +694,10 @@ pub fn bake_seeded(
             }
         }
     }
+    // Compact the baked adjacency rows before sharing the graph with every bot.
+    // Preserve Vec rows for existing pathfinding and cache format compatibility.
+    for row in &mut adj { row.shrink_to_fit(); }
+    for row in &mut component_links { row.shrink_to_fit(); }
     NavGraph {
         generation: 0,
         truncated,
@@ -800,35 +832,168 @@ pub fn nearest_within(graph: &NavGraph, feet: [f32; 3], max_dist: f32) -> Option
     best.map(|(id, _)| id)
 }
 
+/// Reusable per-controller scratch space for directed graph traversals.
+/// A graph-key change invalidates the previous mask; a different start reuses
+/// the allocated vectors without retaining stale reachability results.
+#[derive(Clone, Debug, Default)]
+pub struct ReachabilityWorkspace {
+    key: Option<(u64, u64, u32, u32)>,
+    start: Option<u16>,
+    seen: Vec<bool>,
+    queue: Vec<u16>,
+    cache_hits: u32,
+    traversals: u32,
+}
+impl ReachabilityWorkspace {
+    pub fn invalidate(&mut self) { self.key = None; self.start = None; }
+    /// Cumulative, saturating counters for low-frequency telemetry.
+    pub fn counters(&self) -> (u32, u32) { (self.cache_hits, self.traversals) }
+    pub fn reserved_bytes(&self) -> usize {
+        self.seen.capacity() * std::mem::size_of::<bool>()
+            + self.queue.capacity() * std::mem::size_of::<u16>()
+    }
+    pub fn mask<'a>(&'a mut self, graph: &NavGraph, start: u16) -> &'a [bool] {
+        let key = (graph.generation, graph.digest, graph.schema, graph.hull);
+        if self.key == Some(key) && self.start == Some(start) && self.seen.len() == graph.nodes.len() {
+            self.cache_hits = self.cache_hits.saturating_add(1);
+            return &self.seen;
+        }
+        self.traversals = self.traversals.saturating_add(1);
+        self.key = Some(key);
+        self.start = Some(start);
+        self.seen.resize(graph.nodes.len(), false);
+        self.seen.fill(false);
+        self.queue.clear();
+        if (start as usize) < self.seen.len() {
+            self.seen[start as usize] = true;
+            self.queue.push(start);
+            let mut head = 0;
+            while head < self.queue.len() {
+                let id = self.queue[head];
+                head += 1;
+                for edge in &graph.adj[id as usize] {
+                    let next = edge.to as usize;
+                    if next < self.seen.len() && !self.seen[next] {
+                        self.seen[next] = true;
+                        self.queue.push(edge.to);
+                    }
+                }
+            }
+        }
+        &self.seen
+    }
+}
+
+/// Directed reachability matters: the baked weak components deliberately ignore
+/// edge direction, so a one-way drop may put a goal in the same component even
+/// though it is impossible to reach from the bot's current floor.
+pub fn reachable_mask(graph: &NavGraph, start: u16) -> Vec<bool> {
+    let mut seen = vec![false; graph.nodes.len()];
+    if start as usize >= seen.len() { return seen; }
+    let mut queue = std::collections::VecDeque::new();
+    seen[start as usize] = true;
+    queue.push_back(start);
+    while let Some(id) = queue.pop_front() {
+        for edge in &graph.adj[id as usize] {
+            if !seen[edge.to as usize] {
+                seen[edge.to as usize] = true;
+                queue.push_back(edge.to);
+            }
+        }
+    }
+    seen
+}
+
+/// A deterministic, spatially distributed roam target chosen only from nodes
+/// that are actually reachable following directed links. The caller supplies a
+/// salt to vary the target without introducing nondeterministic simulation RNG.
 pub fn roam_node(graph: &NavGraph, from: [f32; 3], salt: u32) -> Option<[f32; 3]> {
     let start = nearest_within(graph, from, SNAP_IN)?;
-    let comp = graph.component[start as usize];
+    let reachable = reachable_mask(graph, start);
+    roam_node_reachable(graph, from, salt, &reachable)
+}
+
+/// Select a destination using a previously computed directed-reachability mask.
+/// Multiple candidates can share one graph traversal per decision.
+pub fn roam_node_reachable(graph: &NavGraph, from: [f32; 3], salt: u32, reachable: &[bool]) -> Option<[f32; 3]> {
+    if reachable.len() != graph.nodes.len() { return None; }
     let mut best: Option<(u32, [f32; 3])> = None;
-    let mut fallback = None;
+    let mut fallback: Option<(f32, [f32; 3])> = None;
     for (i, pos) in graph.nodes.iter().enumerate() {
-        if graph.component[i] != comp {
-            continue;
-        }
+        if !reachable[i] { continue; }
         let planar = dist_xy(*pos, from);
-        if planar > 8.0 && fallback.is_none() {
-            fallback = Some(*pos);
+        if planar > 96.0 && fallback.is_none_or(|(d, _)| planar > d) {
+            fallback = Some((planar, *pos));
         }
-        if !(128.0..=1024.0).contains(&planar) {
-            continue;
-        }
+        // A minimum distance prevents endless shuffling around spawn.
+        if !(320.0..=1400.0).contains(&planar) { continue; }
         let mut h = (i as u32).wrapping_add(salt.wrapping_mul(0x9E37_79B1));
         h = (h ^ (h >> 16)).wrapping_mul(0x85eb_ca6b);
         h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
         h ^= h >> 16;
-        // Preserve per-bot variety while discouraging the shortest patrols.
-        // The upper bits of the hash remain the primary selection criterion;
-        // a modest distance bonus breaks ties in favour of wider patrols.
-        let score = (h >> 4).saturating_add((planar as u32).saturating_mul(4096));
-        if best.is_none_or(|(best_h, _)| score >= best_h) {
-            best = Some((score, *pos));
+        if best.is_none_or(|(best_h, _)| h >= best_h) {
+            best = Some((h, *pos));
         }
     }
-    best.map(|(_, pos)| pos).or(fallback)
+    best.map(|(_, pos)| pos).or_else(|| fallback.map(|(_, pos)| pos))
+}
+
+/// Compact, allocation-bounded audit for comparing navigation graphs across maps.
+/// Weak components are useful for coverage, but directed reachability is the
+/// authoritative test for spawn exits and one-way drops.
+#[derive(Clone, Debug)]
+pub struct NavAudit {
+    pub nodes: usize,
+    pub edges: usize,
+    pub walk_edges: usize,
+    pub drop_edges: usize,
+    pub glass_edges: usize,
+    pub isolated: usize,
+    pub weak_components: usize,
+    pub largest_component: usize,
+}
+
+pub fn audit(graph: &NavGraph) -> NavAudit {
+    let mut sizes = BTreeMap::<u16, usize>::new();
+    for id in &graph.component { *sizes.entry(*id).or_default() += 1; }
+    let mut out = NavAudit {
+        nodes: graph.nodes.len(), edges: 0, walk_edges: 0,
+        drop_edges: 0, glass_edges: 0, isolated: 0,
+        weak_components: sizes.len(),
+        largest_component: sizes.values().copied().max().unwrap_or(0),
+    };
+    for edges in &graph.adj {
+        out.edges += edges.len();
+        if edges.is_empty() { out.isolated += 1; }
+        for edge in edges {
+            match edge.kind {
+                TraversalKind::Walk | TraversalKind::Crouch | TraversalKind::Climb => out.walk_edges += 1,
+                TraversalKind::Drop => out.drop_edges += 1,
+                TraversalKind::BreakGlass => out.glass_edges += 1,
+            }
+        }
+    }
+    out
+}
+
+/// Opt-in raw graph export for offline inspection. A caller-provided directory
+/// avoids assumptions about iOS sandbox paths; no file is written by default.
+pub fn export_audit_csv(graph: &NavGraph, directory: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(directory)?;
+    let mut nodes = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-nodes.csv"))?);
+    writeln!(nodes, "id,x,y,z,weak_component,out_degree")?;
+    for (i, p) in graph.nodes.iter().enumerate() {
+        writeln!(nodes, "{i},{},{},{},{},{}", p[0], p[1], p[2], graph.component[i], graph.adj[i].len())?;
+    }
+    let mut edges = std::io::BufWriter::new(std::fs::File::create(directory.join("nav-edges.csv"))?);
+    writeln!(edges, "from,to,kind,cost")?;
+    for (i, row) in graph.adj.iter().enumerate() {
+        for e in row {
+            writeln!(edges, "{i},{},{:?},{}", e.to, e.kind, e.cost)?;
+        }
+    }
+    Ok(())
 }
 
 /// Baked supports that could serve as firing positions against a threat at
@@ -982,13 +1147,14 @@ pub struct RouteRequest {
     goals: Vec<u16>,
     goal_kinds: BTreeMap<u16, TraversalKind>,
     search: Option<RouteSearch>,
+    recycled_search: Option<RouteSearch>,
     path: Vec<RouteStep>,
     age_slices: u32,
     starved_slices: u32,
 }
 
 impl RouteRequest {
-    fn begin(key: RouteKey, objective: Option<ModeObjective>) -> Self {
+    fn begin(key: RouteKey, objective: Option<ModeObjective>, recycled_search: Option<RouteSearch>) -> Self {
         Self {
             key,
             objective,
@@ -1002,6 +1168,7 @@ impl RouteRequest {
             goals: Vec::new(),
             goal_kinds: BTreeMap::new(),
             search: None,
+            recycled_search,
             path: Vec::new(),
             age_slices: 0,
             starved_slices: 0,
@@ -1171,9 +1338,16 @@ impl RouteRequest {
         if self.phase == RoutePhase::Search {
             let starts = &self.starts;
             let goals = &self.goals;
-            let search = self
-                .search
-                .get_or_insert_with(|| RouteSearch::begin(graph, starts, goals));
+            if self.search.is_none() {
+                self.search = Some(match self.recycled_search.take() {
+                    Some(mut reused) => {
+                        reused.restart(graph, starts, goals);
+                        reused
+                    }
+                    None => RouteSearch::begin(graph, starts, goals),
+                });
+            }
+            let search = self.search.as_mut().expect("search initialized");
             self.path = search.advance(graph, budget)?;
             self.phase = RoutePhase::ValidateEntry;
         }
@@ -1241,6 +1415,16 @@ pub struct RouteStats {
     pub denied_slices: u32,
     pub max_age_slices: u32,
     pub max_starved_slices: u32,
+    /// Cumulative allocations, reuse and capacity growth for completed/started searches.
+    pub astar_new: u32,
+    pub astar_reused: u32,
+    pub astar_recycled: u32,
+    pub astar_cancelled: u32,
+    pub astar_buffer_grows: u32,
+    /// Current retained capacity in bytes (not additive across time).
+    pub astar_retained_bytes: usize,
+    /// High-water retained capacity for this bot.
+    pub astar_peak_bytes: usize,
 }
 
 const TERMINAL_MEMO: usize = 8;
@@ -1251,6 +1435,7 @@ const TERMINAL_MEMO: usize = 8;
 pub struct RouteWork {
     active: Option<RouteRequest>,
     terminal: Vec<(RouteKey, PathError)>,
+    spare_search: Option<RouteSearch>,
     stats: RouteStats,
 }
 
@@ -1261,6 +1446,16 @@ impl RouteWork {
 
     pub fn is_active(&self) -> bool {
         self.active.is_some()
+    }
+
+    /// Sample capacities without allocating or walking the graph. Includes the
+    /// active and spare search; only one can own a given buffer at a time.
+    fn sample_astar_capacity(&mut self) {
+        let active = self.active.as_ref().and_then(|r| r.search.as_ref().or(r.recycled_search.as_ref()));
+        let bytes = active.map_or(0, RouteSearch::reserved_bytes)
+            .saturating_add(self.spare_search.as_ref().map_or(0, RouteSearch::reserved_bytes));
+        self.stats.astar_retained_bytes = bytes;
+        self.stats.astar_peak_bytes = self.stats.astar_peak_bytes.max(bytes);
     }
 
     /// Slices the live request has waited, and its longest run without progress.
@@ -1276,9 +1471,19 @@ impl RouteWork {
     }
 
     fn drop_active(&mut self, cancelled: bool) {
-        let Some(request) = self.active.take() else {
+        let Some(mut request) = self.active.take() else {
             return;
         };
+        // Recycle a completed or cancelled search only after the live request
+        // has relinquished ownership. Never share mutable search state across bots.
+        if let Some(search) = request.search.take().or(request.recycled_search.take()) {
+            self.spare_search = Some(search);
+            self.stats.astar_recycled = self.stats.astar_recycled.saturating_add(1);
+        }
+        if cancelled {
+            self.stats.astar_cancelled = self.stats.astar_cancelled.saturating_add(1);
+        }
+        self.sample_astar_capacity();
         if !cancelled {
             return;
         }
@@ -1343,11 +1548,30 @@ pub fn find_route_resumable(
     if let Some(error) = work.recall(&key) {
         return Err(error);
     }
-    let request = work
-        .active
-        .get_or_insert_with(|| RouteRequest::begin(key, objective));
+    if work.active.is_none() {
+        let spare = work.spare_search.take();
+        work.active = Some(RouteRequest::begin(key, objective, spare));
+    }
+    work.sample_astar_capacity();
+    let request = work.active.as_mut().expect("request initialized");
     let before = request.progress_mark();
+    let before_search = request.search.is_some();
+    let before_spare = request.recycled_search.is_some();
+    let previous_capacity = request.search.as_ref().or(request.recycled_search.as_ref())
+        .map_or(0, RouteSearch::reserved_bytes);
     let result = request.advance(world, graph, budget, from);
+    if let Some(search) = request.search.as_ref() {
+        if before_spare && search.reserved_bytes() > previous_capacity {
+            work.stats.astar_buffer_grows = work.stats.astar_buffer_grows.saturating_add(1);
+        }
+    }
+    if !before_search && request.search.is_some() {
+        if before_spare {
+            work.stats.astar_reused = work.stats.astar_reused.saturating_add(1);
+        } else {
+            work.stats.astar_new = work.stats.astar_new.saturating_add(1);
+        }
+    }
     request.age_slices = request.age_slices.saturating_add(1);
     if request.progress_mark() == before {
         request.starved_slices = request.starved_slices.saturating_add(1);
@@ -1393,6 +1617,66 @@ fn near_nodes(graph: &NavGraph, at: [f32; 3]) -> Vec<(u16, f32)> {
     nearby
 }
 
+/// Graph-only route diagnosis. This deliberately does not claim a collision-safe
+/// route: live start/goal connector probes and traversal execution remain authoritative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteTopology {
+    MissingStart,
+    MissingGoal,
+    NoDirectedPath,
+    DirectedPath,
+}
+
+/// Diagnose vertical routes using the SAME attachment height limit as the
+/// resumable planner. A downward drop never implies an upward connection.
+pub fn route_topology(graph: &NavGraph, from: [f32; 3], to: [f32; 3]) -> RouteTopology {
+    let starts = near_nodes(graph, from);
+    if starts.is_empty() { return RouteTopology::MissingStart; }
+    let goals = near_nodes(graph, to);
+    if goals.is_empty() { return RouteTopology::MissingGoal; }
+    let mut seen = vec![false; graph.nodes.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for (id, _) in starts {
+        if !seen[id as usize] {
+            seen[id as usize] = true;
+            queue.push_back(id);
+        }
+    }
+    while let Some(id) = queue.pop_front() {
+        if goals.iter().any(|(goal, _)| *goal == id) {
+            return RouteTopology::DirectedPath;
+        }
+        for edge in &graph.adj[id as usize] {
+            let next = edge.to as usize;
+            if next < seen.len() && !seen[next] {
+                seen[next] = true;
+                queue.push_back(edge.to);
+            }
+        }
+    }
+    RouteTopology::NoDirectedPath
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    #[test]
+    fn one_way_drop_is_not_an_upward_route() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0, 0.0, 192.0], [96.0, 0.0, 48.0]];
+        graph.adj = vec![vec![NavEdge { to: 1, cost: 240.0, kind: TraversalKind::Drop }], vec![]];
+        assert_eq!(route_topology(&graph, graph.nodes[0], graph.nodes[1]), RouteTopology::DirectedPath);
+        assert_eq!(route_topology(&graph, graph.nodes[1], graph.nodes[0]), RouteTopology::NoDirectedPath);
+    }
+    #[test]
+    fn stacked_floor_is_not_an_attachment() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0, 0.0, 192.0]];
+        graph.adj = vec![vec![]];
+        assert_eq!(route_topology(&graph, [0.0, 0.0, 48.0], graph.nodes[0]), RouteTopology::MissingStart);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RouteSearch {
     graph_key: (u64, u64, u32, u32),
@@ -1436,6 +1720,43 @@ impl RouteSearch {
             )));
         }
         search
+    }
+
+    /// Reset all per-request state while preserving heap capacity. Called only
+    /// for a new request, never during a budget-exhausted resumable search.
+    fn restart(&mut self, graph: &NavGraph, starts: &[(u16, f32)], goals: &[u16]) {
+        let n = graph.nodes.len();
+        self.graph_key = graph_key(graph);
+        self.goals.clear();
+        self.goals.extend_from_slice(goals);
+        self.is_goal.resize(n, false);
+        self.is_goal.fill(false);
+        self.g.resize(n, f32::INFINITY);
+        self.g.fill(f32::INFINITY);
+        self.parent.resize(n, None);
+        self.parent.fill(None);
+        self.closed.resize(n, false);
+        self.closed.fill(false);
+        self.open.clear();
+        self.expanded = 0;
+        self.result = None;
+        for &id in goals { self.is_goal[id as usize] = true; }
+        for &(id, cost) in starts {
+            self.g[id as usize] = cost;
+            self.open.push(Reverse((
+                OrdF(cost + HEURISTIC_WEIGHT * self.heuristic(graph, id)), id, 0,
+            )));
+        }
+    }
+
+    /// Capacity estimate excludes allocator bookkeeping and result path capacity.
+    fn reserved_bytes(&self) -> usize {
+        self.goals.capacity() * std::mem::size_of::<u16>()
+            + self.is_goal.capacity() * std::mem::size_of::<bool>()
+            + self.g.capacity() * std::mem::size_of::<f32>()
+            + self.parent.capacity() * std::mem::size_of::<Option<(u16, TraversalKind)>>()
+            + self.closed.capacity() * std::mem::size_of::<bool>()
+            + self.open.capacity() * std::mem::size_of::<Reverse<(OrdF, u16, u32)>>()
     }
 
     fn heuristic(&self, graph: &NavGraph, id: u16) -> f32 {
@@ -1676,5 +1997,102 @@ impl Ord for OrdF {
 impl PartialOrd for OrdF {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod reachability_workspace_tests {
+    use super::*;
+    #[test]
+    fn directed_drop_is_not_reversible_and_start_invalidates_mask() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0; 3]; 2];
+        graph.adj = vec![vec![NavEdge { to: 1, cost: 1.0, kind: TraversalKind::Drop }], vec![]];
+        let mut scratch = ReachabilityWorkspace::default();
+        assert_eq!(scratch.mask(&graph, 0), &[true, true]);
+        assert_eq!(scratch.mask(&graph, 1), &[false, true]);
+        graph.generation += 1;
+        graph.adj[1].push(NavEdge { to: 0, cost: 1.0, kind: TraversalKind::Walk });
+        assert_eq!(scratch.mask(&graph, 1), &[true, true]);
+    }
+}
+
+
+#[cfg(test)]
+mod allocation_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn reports_reserved_adjacency_capacity() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0; 3], [1.0; 3]];
+        let mut row = Vec::with_capacity(16);
+        row.push(NavEdge { to: 1, cost: 1.0, kind: TraversalKind::Walk });
+        graph.adj = vec![row, Vec::new()];
+        let stats = graph.allocation_stats();
+        assert_eq!(stats.edges, 1);
+        assert!(stats.reserved_edges >= 16);
+        assert!(stats.wasted_edge_slots >= 15);
+        assert!(stats.estimated_adjacency_bytes > 0);
+    }
+    #[test]
+    fn reachability_reports_cache_hits_without_new_traversal() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0; 3], [1.0; 3]];
+        graph.adj = vec![vec![NavEdge { to: 1, cost: 1.0, kind: TraversalKind::Walk }], vec![]];
+        let mut workspace = ReachabilityWorkspace::default();
+        assert!(workspace.mask(&graph, 0)[1]);
+        assert!(workspace.mask(&graph, 0)[1]);
+        assert_eq!(workspace.counters(), (1, 1));
+        graph.generation += 1;
+        assert!(workspace.mask(&graph, 0)[1]);
+        assert_eq!(workspace.counters(), (1, 2));
+    }
+}
+
+#[cfg(test)]
+mod astar_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn capacity_estimate_and_reuse_growth() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0; 3], [48.0, 0.0, 0.0]];
+        graph.adj = vec![vec![], vec![]];
+        let mut search = RouteSearch::begin(&graph, &[(0, 0.0)], &[1]);
+        let initial = search.reserved_bytes();
+        assert!(initial > 0);
+        search.restart(&graph, &[(0, 0.0)], &[1]);
+        assert!(search.reserved_bytes() >= initial);
+        let mut work = RouteWork::default();
+        work.spare_search = Some(search);
+        work.sample_astar_capacity();
+        assert!(work.stats().astar_retained_bytes >= initial);
+        assert!(work.stats().astar_peak_bytes >= initial);
+    }
+}
+
+#[cfg(test)]
+mod pooled_search_tests {
+    use super::*;
+
+    #[test]
+    fn recycled_search_resets_graph_and_goal_state() {
+        let mut graph = NavGraph::default();
+        graph.nodes = vec![[0.0; 3], [48.0, 0.0, 0.0]];
+        graph.adj = vec![
+            vec![NavEdge { to: 1, cost: 48.0, kind: TraversalKind::Walk }],
+            vec![],
+        ];
+        let mut search = RouteSearch::begin(&graph, &[(0, 0.0)], &[1]);
+        let mut budget = 32;
+        assert!(search.advance(&graph, &mut budget).is_ok());
+        // The old goal is now unreachable; stale result or goal flags would
+        // incorrectly return the previous route.
+        search.restart(&graph, &[(1, 0.0)], &[0]);
+        let mut budget = 32;
+        assert_eq!(search.advance(&graph, &mut budget), Err(PathError::Unreachable));
+        graph.generation += 1;
+        search.restart(&graph, &[(0, 0.0)], &[1]);
+        let mut budget = 32;
+        assert!(search.advance(&graph, &mut budget).is_ok());
     }
 }

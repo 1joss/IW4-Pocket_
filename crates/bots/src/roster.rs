@@ -480,6 +480,8 @@ pub struct BotSlot {
     pub joined: bool,
     pub class_picked_in: Option<LifeSequence>,
     pub class_picks: u32,
+    /// Match-stable eligible class selection, reused on every respawn.
+    pub class_index: Option<u8>,
 }
 
 #[derive(Resource, Debug)]
@@ -571,6 +573,7 @@ impl BotRoster {
                 joined: false,
                 class_picked_in: None,
                 class_picks: 0,
+                class_index: None,
             });
             added.push(id);
         }
@@ -594,6 +597,11 @@ impl BotRoster {
         }
         None
     }
+}
+
+/// Stable for a bot's entire match, independent of death count.
+pub fn match_class_index(seed: u64, client: ClientId) -> u8 {
+    default_class_index(seed, client, 0)
 }
 
 pub fn default_class_index(seed: u64, client: ClientId, pick: u32) -> u8 {
@@ -753,5 +761,17 @@ mod name_tests {
             assert_eq!(&packed[..name.len()], name.as_bytes());
             assert_eq!(packed[name.len()], 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod persistent_class_tests {
+    use super::*;
+    #[test]
+    fn class_selection_is_deterministic_for_a_match() {
+        let id = ClientId(7);
+        let index = match_class_index(123, id);
+        assert_eq!(index, match_class_index(123, id));
+        assert_eq!(index, default_class_index(123, id, 0));
     }
 }

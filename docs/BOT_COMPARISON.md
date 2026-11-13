@@ -1,5 +1,7 @@
 # IW4 Bot Compare
 
+Baseline: V6 commit `d9e2f27fe3cfb000013dc2fce5f05254ace861a6`, matching the latest successful existing IPA build.
+
 This experimental IPA installs beside IW4 Pocket with bundle identifier
 `com.1joss.iw4pocket.botcomparison`. It uses a separate iOS Documents folder:
 import your own MW2 game data into this app as you did for IW4 Pocket.
@@ -10,7 +12,7 @@ close and relaunch the app. Auto is Pocket. Bot count remains the lobby setting.
 
 | Selection | Decisions and combat | Navigation |
 |---|---|---|
-| Pocket | Existing Pocket controller | Generated graph, including the two patches used by the existing IPA workflow |
+| Pocket | Existing Pocket controller | Current V6 generated graph and controller |
 | Pocket + BW | Same Pocket controller | Bundled Bot Warfare directed waypoint graph |
 | Recompiled + BW | Actual pinned Recompiled C++ brain, Regular skill | Same bundled Bot Warfare waypoint data |
 

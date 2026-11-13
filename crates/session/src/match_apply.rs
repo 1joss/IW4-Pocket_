@@ -1651,6 +1651,9 @@ fn install_clip_and_player(
     let bot_classes: Vec<sim::ClassDef> = frame::showcase_classes()
         .iter()
         .enumerate()
+        // Keep the original showcase index for class projection; only
+        // remove ineligible bot presets from the final pool.
+        .filter(|(_, preset)| preset.primary != "iw4:weapon/riotshield_mp")
         .map(|(index, preset)| {
             let row = ClassRow::from(&preset.into());
             project_class(index as u32, &row, weapons, combat, equipment).def
