@@ -21,8 +21,8 @@ expected = '34d1bac73fcb607e9961a678007694f8fff155f068d8ea6a862943240ea1988d'
 brain = ROOT / 'crates/bots/recompiled/runtime/bots/brain.cpp'
 assert hashlib.sha256(brain.read_bytes()).hexdigest() == expected
 plist = plistlib.loads((ROOT / 'ios/Info.plist').read_bytes())
-assert plist['CFBundleIdentifier'] == 'com.1joss.iw4pocket.botcomparison'
-assert plist['CFBundleDisplayName'] == 'IW4 Bot Compare'
+assert plist['CFBundleIdentifier'] == 'com.markussela.iw4l'
+assert plist['CFBundleDisplayName'] == 'IW4 Pocket'
 
 harness = r'''
 #include "bridge.cpp"

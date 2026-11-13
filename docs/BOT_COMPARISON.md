@@ -2,9 +2,12 @@
 
 Baseline: V6 commit `d9e2f27fe3cfb000013dc2fce5f05254ace861a6`, matching the latest successful existing IPA build.
 
-This experimental IPA installs beside IW4 Pocket with bundle identifier
-`com.1joss.iw4pocket.botcomparison`. It uses a separate iOS Documents folder:
-import your own MW2 game data into this app as you did for IW4 Pocket.
+This experimental IPA updates the existing IW4 Pocket app, using its original
+bundle identifier `com.markussela.iw4l`, app name and executable. Build number
+is 25. Install it as an update using the same signing account and installation
+method as the existing app, preserving its signed app identifier. Do not delete
+or uninstall the existing app first: its Documents folder contains the game files.
+No second copy of the game data is needed for an in-place update.
 The IPA is unsigned, matching this project's existing sideloading workflow.
 
 Open **IW4 Pocket options → Bot comparison**, choose a mode, then completely

@@ -18,10 +18,10 @@ class Contract(unittest.TestCase):
         plist = plistlib.loads((ROOT / "ios/Info.plist").read_bytes())
         self.assertEqual(plist["CFBundleShortVersionString"], cargo.split("-", 1)[0])
         self.assertEqual(cargo, "0.4.0")
-        self.assertEqual(plist["CFBundleVersion"], "24")
+        self.assertEqual(plist["CFBundleVersion"], "25")
         # The label shown in the main menu is the release name.
         self.assertIn('const APP_LABEL: &str = "0.4.0";', text("crates/launcher/src/main.rs"))
-        self.assertEqual(plist["CFBundleIdentifier"], "com.1joss.iw4pocket.botcomparison")
+        self.assertEqual(plist["CFBundleIdentifier"], "com.markussela.iw4l")
         lock = re.search(r'name = "launcher"\nversion = "([^"]+)"', text("Cargo.lock"))
         self.assertIsNotNone(lock)
         self.assertEqual(lock.group(1), cargo)
