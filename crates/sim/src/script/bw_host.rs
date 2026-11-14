@@ -175,6 +175,15 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         ))
     });
     registry.register(Function, "addtestclient", create_bot);
+    registry.register(Method, "getguid", |w, r, _| {
+        let id = player(w, r)?;
+        let guid = if w.resource::<Runtime>().bw.inputs.contains_key(&id) {
+            format!("bot{id}")
+        } else {
+            format!("{:016x}", u64::from(id) + 1)
+        };
+        Ok(Value::string(&guid))
+    });
     registry.register(Method, "isbot", |w, r, _| {
         let id = player(w, r)?;
         Ok(Value::Int(

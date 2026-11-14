@@ -209,7 +209,7 @@ fn bot_warfare_new_life_clears_previous_controls_before_new_input() {
 fn bot_warfare_admission_connect_begin_disconnect_and_slot_reuse() {
     use structured_data_iw4::{DataType, Definition, DefinitionSet};
     let sources=BTreeMap::from([
-        ("maps/mp/bots/test".into(),"main() { level.begins=0; level.first=addtestclient(); level.second=addtestclient(); } one() { level.replacement=addtestclient(); }".into()),
+        ("maps/mp/bots/test".into(),"main() { level.begins=0; if(getdvarint(\"fixture_started\")==0) { level.first=addtestclient(); level.second=addtestclient(); setdvar(\"fixture_started\",1); } } one() { level.replacement=addtestclient(); } restart(persist) { map_restart(persist); }".into()),
         ("maps/mp/gametypes/_callbacksetup".into(),"codecallback_playerconnect() { self waittill(\"begin\"); level.begins++; } codecallback_playerdisconnect() { self notify(\"disconnect\"); }".into()),
     ]);
     let program = Program::load(
@@ -295,4 +295,73 @@ fn bot_warfare_admission_connect_begin_disconnect_and_slot_reuse() {
         world.persistent_data().account(ClientId(17)).unwrap(),
         account
     );
+    let account_before_restart = world.persistent_data().account(ClientId(17)).unwrap();
+    for (tick, persist) in [(5, 1), (8, 0)] {
+        world
+            .ecs
+            .resource_mut::<Runtime>()
+            .bw
+            .inputs
+            .get_mut(&17)
+            .unwrap()
+            .buttons = playerstate_iw4::buttons::ATTACK;
+        world
+            .start_gsc(
+                "maps/mp/bots/test::restart",
+                Value::Undefined,
+                vec![Value::Int(persist)],
+            )
+            .unwrap();
+        step(
+            &mut world,
+            Tick(tick),
+            &TickInput::default(),
+            50,
+            StepReason::AuthorityFrame,
+        );
+        step(
+            &mut world,
+            Tick(tick + 1),
+            &TickInput::default(),
+            50,
+            StepReason::AuthorityFrame,
+        );
+        step(
+            &mut world,
+            Tick(tick + 2),
+            &TickInput::default(),
+            50,
+            StepReason::AuthorityFrame,
+        );
+        assert_eq!(
+            world.bot_warfare_clients(),
+            vec![ClientId(16), ClientId(17)]
+        );
+        assert_eq!(world.ecs.resource::<Runtime>().bw.inputs[&17].buttons, 0);
+        assert_eq!(
+            world.persistent_data().account(ClientId(17)),
+            Some(account_before_restart)
+        );
+        let object = world.ecs.resource::<Runtime>().players[&17].object;
+        assert_eq!(
+            call(&mut world, "getguid", &Value::Object(object), &[]).unwrap(),
+            Value::string("bot17")
+        );
+    }
+    // A subsequent admission must not reuse an existing temporary account id.
+    world
+        .start_gsc("maps/mp/bots/test::one", Value::Undefined, vec![])
+        .unwrap();
+    step(
+        &mut world,
+        Tick(11),
+        &TickInput::default(),
+        50,
+        StepReason::AuthorityFrame,
+    );
+    assert_eq!(
+        world.bot_warfare_clients(),
+        vec![ClientId(15), ClientId(16), ClientId(17)]
+    );
+    assert!(world.ecs.resource::<Runtime>().errors.is_empty());
 }

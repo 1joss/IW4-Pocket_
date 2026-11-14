@@ -39,7 +39,7 @@ First run Terminal TDM, Highrise TDM and Afghan Domination, with the same bot co
 match settings and skill. Let each run for at least two minutes after spawning.
 Include spawn exits, the Terminal doorways and Domination captures. Record the
 map, bot count, approximate time and what you observed. Compare 5, 11 and 17 bots
-in separate runs to expose scaling. Export before starting more than three maps.
+in separate runs to expose scaling. Export before starting more than three sessions (round restarts also count).
 
 Export **the entire `Documents/BotWarfareDiagnostics` folder plus
 `iw4l-boot.log` and `iw4l-boot.prev.log`** through the app's Files container. Summary
@@ -48,7 +48,7 @@ problem is identified; its extra work changes performance. Use Off with the same
 scenario to estimate instrumentation overhead against the normal frame reports.
 The standard Send logs button opens a report page; it does not attach this folder.
 
-Each map gets a timestamped session with:
+Each map load or in-place round restart gets a timestamped session with:
 
 - `manifest.json`: schema/backend, pinned source, build, compiled module hashes,
   function/native identity tables, settings mode and capture limits.
@@ -110,7 +110,7 @@ optimization or on-device gameplay issue has been diagnosed already.
 ## Validation
 
 - `cargo test -p sim --lib`: simulation, held-action/human isolation, respawn input
-  reset, temporary bot admission/connect/begin/disconnect/slot reuse, nested GSC profiling/error accounting and bounded diagnostic queue tests.
+  reset, temporary bot admission/connect/begin/disconnect/slot reuse and persistent/nonpersistent round restarts, nested GSC profiling/error accounting and bounded diagnostic queue tests.
 - `cargo check -p console`: complete desktop application dependency integration.
 - Import/analyzer, iOS memory/package/menu and release-source contract tests.
 - `cargo run -p sim --example bw_compile -- <stock-script-root>` compiles the full

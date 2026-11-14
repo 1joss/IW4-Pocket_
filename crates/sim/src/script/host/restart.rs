@@ -116,6 +116,12 @@ pub(crate) fn restart_level(world: &mut World, tick: crate::Tick) {
             Some((*client, detach(runtime, &pers, 0)?))
         })
         .collect();
+    // Test clients remain admitted across an in-place GSC round restart.
+    // Keep their identity/serial but discard controls from the previous life.
+    let mut bw = runtime.bw.clone();
+    for input in bw.inputs.values_mut() {
+        *input = Default::default();
+    }
     let dvars = runtime.dvars.clone();
     let local_presentation_dvars = runtime.local_presentation_dvars;
     let local_presentation_client = runtime.local_presentation_client;
@@ -166,6 +172,7 @@ pub(crate) fn restart_level(world: &mut World, tick: crate::Tick) {
     reset(world);
     {
         let mut runtime = world.resource_mut::<Runtime>();
+        runtime.bw = bw;
         runtime.dvars = dvars;
         runtime.local_presentation_dvars = local_presentation_dvars;
         runtime.local_presentation_client = local_presentation_client;
@@ -178,6 +185,7 @@ pub(crate) fn restart_level(world: &mut World, tick: crate::Tick) {
     }
     let mut runtime = world.resource_mut::<Runtime>();
     runtime.last_tick = Some(tick);
+    runtime.benchmark.tick = tick.0;
     runtime.weapon_bridge = weapon_bridge;
     runtime.personal_classes = personal_classes;
     runtime.next_spawned_presence = next_presence;
