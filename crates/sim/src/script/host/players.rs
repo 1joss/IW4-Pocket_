@@ -999,7 +999,7 @@ pub(crate) struct PlayerLink {
 }
 
 impl PlayerSlot {
-    fn new(object: u64) -> Self {
+    pub(crate) fn new(object: u64) -> Self {
         Self {
             object,
             begun: false,
@@ -1129,6 +1129,7 @@ pub(crate) fn disconnect_player(world: &mut World, client: u32) {
             .personal_classes
             .retain(|(owner, _), _| *owner != client);
         runtime.weapon_bridge.remove(&client);
+        runtime.bw.inputs.remove(&client);
         runtime.selected_classes.remove(&client);
         if runtime.local_presentation_client == Some(ClientId(client)) {
             runtime.pending_local_dvars.clear();

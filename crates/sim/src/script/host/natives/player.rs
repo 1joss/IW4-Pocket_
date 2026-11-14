@@ -1448,6 +1448,7 @@ fn register_inventory(registry: &mut NativeRegistry) {
         let id = client_of(world, receiver)?;
         let weapon = player_weapon(world, id, args, 0)?;
         script_player::switch_to_weapon(&mut FrameWorld::from_world(world), id, weapon);
+        if let Some(bot)=world.resource_mut::<Runtime>().bw.inputs.get_mut(&id.0) {bot.weapon=weapon as u16;}
         Ok(Value::Undefined)
     });
     registry.register(
@@ -1461,6 +1462,7 @@ fn register_inventory(registry: &mut NativeRegistry) {
                 id,
                 weapon,
             )?;
+            if let Some(bot)=world.resource_mut::<Runtime>().bw.inputs.get_mut(&id.0) {bot.weapon=weapon as u16;}
             Ok(Value::Undefined)
         },
     );

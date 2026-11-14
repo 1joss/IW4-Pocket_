@@ -25,6 +25,7 @@ pub(crate) fn copy_state(source: &World, target: &mut World) {
 }
 
 pub(crate) fn reset(world: &mut World) {
+    world.resource_mut::<Runtime>().benchmark.finish();
     let ids: Vec<_> = world
         .query_filtered::<Entity, bevy_ecs::query::With<Thread>>()
         .iter(world)
@@ -98,6 +99,7 @@ pub(crate) fn install_level(
         .map(|b| natives.get(b.namespace, b.name).unwrap())
         .collect();
     let mut runtime = world.resource_mut::<Runtime>();
+    runtime.benchmark.initialize(&program);
     runtime.program = Some(program.clone());
     runtime.natives = bound;
     runtime.objects.insert(0, BTreeMap::new());

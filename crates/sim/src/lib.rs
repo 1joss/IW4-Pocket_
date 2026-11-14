@@ -1,3 +1,4 @@
+pub mod bot_warfare;
 pub mod adopt;
 pub mod bullet;
 mod shield;

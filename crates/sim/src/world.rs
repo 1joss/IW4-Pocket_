@@ -4174,6 +4174,7 @@ pub struct WeaponScriptSounds {
 #[cfg(test)]
 mod area_entity_num_tests {
     use super::*;
+    use crate::SimWorld;
 
     #[test]
     fn client_ids_inside_the_collision_world_map_to_their_own_number() {

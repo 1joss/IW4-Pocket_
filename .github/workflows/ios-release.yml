@@ -17,16 +17,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
           
-      - name: Apply bot navigation patches
-        run: |
-          git apply --check iw4-pocket-bot-navigation-p0-p2.patch
-          git apply iw4-pocket-bot-navigation-p0-p2.patch
-
-          git apply --check iw4-pocket-bot-vertical-traversal-v1.patch
-          git apply iw4-pocket-bot-vertical-traversal-v1.patch
       - run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-ios
       - name: Test memory controls and package contracts
         run: |
+          python3 tools/test_bw_import.py
           python3 tools/test_ios_memory_contract.py
           python3 tools/test_gen_source.py
           rustc --edition=2024 --test crates/diag/src/memory_settings.rs -o /tmp/memory-settings-tests
@@ -41,6 +35,8 @@ jobs:
           # Fall back to the newest earlier cache: cargo then rebuilds only what changed.
           restore-keys: |
             ios-ipa-
+      - name: Test simulation and Bot Warfare bridge
+        run: cargo test -p sim --lib --locked
       - name: Build iw4l for iOS
         env:
           IPHONEOS_DEPLOYMENT_TARGET: "15.0"

@@ -856,6 +856,7 @@ fn script_refusal(
     stage: &str,
     fault: &sim::script::Fault,
 ) -> InstallRefusal {
+    sim::bot_warfare::report_load_error(zone,gametype,stage,fault);
     let text = fault.to_string();
     let head = text.lines().next().unwrap_or("").replace('"', "'");
     diag::script_boundary(
@@ -1015,14 +1016,14 @@ fn preflight_match_install(
     struct Sources(assets::ScriptSources);
     impl sim::script::SourceResolver for Sources {
         fn read(&self, module: &str) -> Result<String, String> {
-            self.0
-                .read(module)
+            sim::bot_warfare::source(module).map(str::as_bytes).map(Vec::from).map(Ok).unwrap_or_else(|| self.0.read(module))
                 .map(|bytes| sim::script::decode_source(&bytes))
         }
         fn read_bytes(&self, module: &str) -> Result<Vec<u8>, String> {
-            self.0.read(module)
+            sim::bot_warfare::source(module).map(str::as_bytes).map(Vec::from).map(Ok).unwrap_or_else(|| self.0.read(module))
         }
         fn origin(&self, module: &str) -> sim::script::SourceOrigin {
+            if sim::bot_warfare::source(module).is_some() { return sim::script::SourceOrigin::BuiltIn; }
             match self.0.origin(module) {
                 Some(assets::ScriptSourceOrigin::Packaged) => sim::script::SourceOrigin::Packaged,
                 Some(assets::ScriptSourceOrigin::BuiltIn) => sim::script::SourceOrigin::BuiltIn,

@@ -12,6 +12,8 @@ pub(crate) struct Runtime {
     pub(crate) next_serial: u64,
     pub fault: Option<Fault>,
     pub(crate) fault_reported: bool,
+    pub(crate) bw: super::super::bw_host::BotState,
+    pub(crate) benchmark: super::super::benchmark::Benchmark,
     pub(crate) errors: BTreeMap<(String, String), u64>,
     /// Deleted entities scripts may still hold. They keep their fields until
     /// the end of the frame that deleted them, then read as undefined.

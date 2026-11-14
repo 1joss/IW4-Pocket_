@@ -866,11 +866,43 @@ fn instruction(
                     let native = world.resource::<Runtime>().natives[index as usize];
                     let name = &program.natives[index as usize].name;
                     // A defect in one builtin costs its caller an undefined result, not the match.
+                    let native_started = std::time::Instant::now();
+                    let context_depth = world
+                        .resource::<Runtime>()
+                        .benchmark
+                        .spans
+                        .len()
+                        .checked_sub(1);
+                    let nested_before = context_depth.map_or(0, |d| {
+                        world.resource::<Runtime>().benchmark.spans[d].nested_ns
+                    });
+                    let owner = thread.frames.last().map_or(0, |f| f.function);
                     let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         native(world, &receiver, &args)
                     }))
                     .unwrap_or_else(|_| Err("builtin panicked".into()))
-                    .map_err(|m| format!("{name}: {m}"))?;
+                    .map_err(|m| format!("{name}: {m}"));
+                    let native_elapsed = native_started.elapsed().as_nanos() as u64;
+                    if let Some(d) = context_depth {
+                        let mut runtime = world.resource_mut::<Runtime>();
+                        let span = &mut runtime.benchmark.spans[d];
+                        span.native_ns +=
+                            native_elapsed.saturating_sub(span.nested_ns - nested_before);
+                    }
+                    super::benchmark::native(
+                        world,
+                        index as usize,
+                        owner,
+                        program.functions[owner].code
+                            [thread.frames.last().unwrap().pc.saturating_sub(1)]
+                        .0
+                        .line,
+                        native_elapsed,
+                        &args,
+                        &value,
+                        &receiver,
+                    );
+                    let value = value?;
                     thread.stack.push(value);
                     deliver_pending(world, thread, now)?;
                     settle_owed_deaths(world, thread, now)?;
@@ -1252,11 +1284,13 @@ fn kill(world: &mut World, entity: Entity, serial: u64) {
 }
 
 pub(crate) fn advance_scheduler(world: &mut World) {
+    let benchmark_started = std::time::Instant::now();
     let request = world.resource::<crate::step::StepRequest>();
     if !request.reason.advances_authority_world() {
         return;
     }
     let tick = request.tick;
+    world.resource_mut::<Runtime>().benchmark.tick = tick.0;
     let runtime = world.resource::<Runtime>();
     if runtime.fault.is_some() {
         return;
@@ -1323,7 +1357,14 @@ pub(crate) fn advance_scheduler(world: &mut World) {
         runtime.buckets.remove(&now);
     }
     runtime.loading = false;
+    let gc_started = std::time::Instant::now();
     collect_heap(world);
+    super::benchmark::frame_end(
+        world,
+        &program,
+        benchmark_started.elapsed().as_nanos() as u64,
+        gc_started.elapsed().as_nanos() as u64,
+    );
 }
 
 fn run_ready(world: &mut World, program: &Program, now: i64) {
@@ -1360,7 +1401,49 @@ fn run_ready(world: &mut World, program: &Program, now: i64) {
 }
 
 pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread, now: i64) {
+    let profiling = world.resource::<Runtime>().benchmark.enabled;
+    let execution_started = std::time::Instant::now();
+    let depth = world.resource::<Runtime>().benchmark.spans.len();
+    if profiling {
+        world
+            .resource_mut::<Runtime>()
+            .benchmark
+            .spans
+            .push(super::benchmark::Span::default());
+    }
+    let initial_frame = thread
+        .frames
+        .last()
+        .map(|f| (f.function, f.receiver.clone()));
+    let detailed = world.resource::<Runtime>().benchmark.detailed;
+    let mut segment_instructions = 0u64;
+    let mut owner = None;
+    let mut segment_started = std::time::Instant::now();
+    let mut native_start = 0;
     while thread.state == ThreadState::Runnable {
+        let frame = thread.frames.last().unwrap();
+        if profiling {
+            let id = frame.function;
+            if owner != Some(id) {
+                let mut runtime = world.resource_mut::<Runtime>();
+                let native_now = runtime.benchmark.spans[depth].native_ns
+                    + runtime.benchmark.spans[depth].nested_ns;
+                if let Some(previous) = owner {
+                    let ns = (segment_started.elapsed().as_nanos() as u64)
+                        .saturating_sub(native_now - native_start);
+                    let s = &mut runtime.benchmark.functions[previous];
+                    s.instructions += segment_instructions;
+                    s.ns += ns;
+                    s.max_ns = s.max_ns.max(ns);
+                }
+                owner = Some(id);
+                segment_started = std::time::Instant::now();
+                native_start = native_now;
+                runtime.benchmark.functions[id].calls += 1;
+                segment_instructions = 0;
+            }
+            segment_instructions += 1;
+        }
         let frame = thread.frames.last().unwrap();
         let function = &program.functions[frame.function];
         let Some((location, op)) = function.code.get(frame.pc).cloned() else {
@@ -1370,6 +1453,14 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
             ));
             break;
         };
+        if detailed {
+            *world
+                .resource_mut::<Runtime>()
+                .benchmark
+                .lines
+                .entry((frame.function, location.line))
+                .or_default() += 1;
+        }
         let exhausted = world.resource::<Runtime>().budget == 0;
         let (pops, pushes) = stack_effect(&op);
         let iterates = matches!(op, Op::ArrayKeys);
@@ -1437,6 +1528,30 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
             }
         }
     }
+    if profiling {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let child_total = execution_started.elapsed().as_nanos() as u64;
+        runtime.benchmark.resumes += 1;
+        if let Some(id) = owner {
+            let ns = (segment_started.elapsed().as_nanos() as u64).saturating_sub(
+                (runtime.benchmark.spans[depth].native_ns
+                    + runtime.benchmark.spans[depth].nested_ns)
+                    - native_start,
+            );
+            let stat = &mut runtime.benchmark.functions[id];
+            stat.instructions += segment_instructions;
+            stat.ns += ns;
+            stat.max_ns = stat.max_ns.max(ns);
+        }
+        if runtime.benchmark.detailed {
+            let tick = runtime.benchmark.tick;
+            runtime.benchmark.queue(serde_json::json!({"type":"resume","tick":tick,"thread":thread.serial,"frame":initial_frame.as_ref().map(|(id,r)|serde_json::json!({"function":id,"receiver":super::benchmark::value(r)})),"wall_ns":child_total,"state":format!("{:?}",thread.state)}));
+        }
+        runtime.benchmark.spans.pop();
+        if let Some(parent) = runtime.benchmark.spans.last_mut() {
+            parent.nested_ns += child_total;
+        }
+    }
 }
 
 fn stack_effect(op: &Op) -> (usize, usize) {
@@ -1478,6 +1593,11 @@ fn report(world: &mut World, fault: &Fault) {
         .or_default();
     *hits += 1;
     if *hits == 1 {
+        super::benchmark::event(
+            world,
+            "runtime_error",
+            &format!("{fault}; callers={:?}", fault.callers),
+        );
         diag::warn!(Sim, "gsc: script runtime error: {fault}");
         diag::script_boundary(
             "runtime_error",
@@ -1544,6 +1664,7 @@ fn allocate_array(world: &mut World) -> Result<Value, String> {
     let id = runtime.next_object;
     runtime.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
     runtime.arrays.insert(id, BTreeMap::new());
+    runtime.benchmark.allocations += 1;
     Ok(Value::Array(id))
 }
 

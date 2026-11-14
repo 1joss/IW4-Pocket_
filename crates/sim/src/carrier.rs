@@ -89,6 +89,16 @@ impl DerefMut for SimWorld {
 }
 
 impl SimWorld {
+    pub fn set_bot_warfare_count(&mut self,count:u32) {
+        if let Some(mut runtime)=self.ecs.get_resource_mut::<crate::script::Runtime>() {
+            runtime.dvars.insert("bots_manage_fill".into(),count.min(17).to_string());
+            runtime.dvars.insert("bots_manage_fill_mode".into(),"1".into());
+        }
+    }
+    pub fn bot_warfare_clients(&self)->Vec<ClientId> {
+        self.ecs.get_resource::<crate::script::Runtime>().map(|r|r.bw.inputs.keys().map(|id|ClientId(*id)).collect()).unwrap_or_default()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -217,6 +227,10 @@ impl SimWorld {
         let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
         if runtime.fault_reported {
             return None;
+        }
+        if let Some(fault)=runtime.fault.clone() {
+            runtime.benchmark.queue(serde_json::json!({"type":"fatal_error","message":fault.to_string(),"callers":format!("{:?}",fault.callers)}));
+            runtime.benchmark.flush();
         }
         runtime.fault_reported = runtime.fault.is_some();
         runtime.fault.clone()
@@ -445,3 +459,7 @@ pub fn try_step(
 ) -> Result<crate::TickResult, crate::script::Fault> {
     world.run(tick, input, msec, reason)
 }
+
+#[cfg(test)]
+#[path = "bw_tests.rs"]
+mod bw_tests;

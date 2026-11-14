@@ -18,7 +18,7 @@ class Contract(unittest.TestCase):
         plist = plistlib.loads((ROOT / "ios/Info.plist").read_bytes())
         self.assertEqual(plist["CFBundleShortVersionString"], cargo.split("-", 1)[0])
         self.assertEqual(cargo, "0.4.0")
-        self.assertEqual(plist["CFBundleVersion"], "24")
+        self.assertEqual(plist["CFBundleVersion"], "26")
         # The label shown in the main menu is the release name.
         self.assertIn('const APP_LABEL: &str = "0.4.0";', text("crates/launcher/src/main.rs"))
         self.assertEqual(plist["CFBundleIdentifier"], "com.markussela.iw4l")
@@ -27,7 +27,7 @@ class Contract(unittest.TestCase):
         self.assertEqual(lock.group(1), cargo)
 
     def test_markers_exist_in_sources(self):
-        sources = "\n".join(p.read_text() for p in (ROOT / "crates").rglob("*.rs"))
+        sources = "\n".join(p.read_text() for p in (ROOT / "crates").rglob("*") if p.suffix in {".rs", ".gsc"})
         verify = text("tools/verify_ios_ipa.py")
         for marker in re.findall(r'b"([^"]+)"', verify.split("MARKERS", 1)[1].split(")", 1)[0]):
             self.assertIn(marker, sources, marker)

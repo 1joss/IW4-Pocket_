@@ -48,7 +48,9 @@ pub struct Catalog {
 }
 impl Catalog {
     pub fn iw4() -> Self {
-        Self::from_list(crate::script::Realm::Iw4, super::iw4_catalog::IW4)
+        let mut catalog = Self::from_list(crate::script::Realm::Iw4, super::iw4_catalog::IW4);
+        for builtin in crate::bot_warfare::builtins() { catalog.insert(builtin); }
+        catalog
     }
     pub fn t5() -> Self {
         Self::from_list(crate::script::Realm::T5, super::t5_catalog::T5)

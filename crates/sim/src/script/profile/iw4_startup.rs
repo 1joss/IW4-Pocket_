@@ -26,6 +26,11 @@ impl Iw4Startup {
             roots.push(t6_equipment.to_owned());
             entries.push(format!("{t6_equipment}::main"));
         }
+        // Register the engine adapter before Bot Warfare's init threads start.
+        for module in crate::bot_warfare::ENTRY_MODULES {
+            roots.push((*module).into());
+            entries.push(format!("{module}::init"));
+        }
         entries.push(format!("{callbacks}::codecallback_startgametype"));
         Self { roots, entries }
     }

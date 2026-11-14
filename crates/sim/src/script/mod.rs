@@ -1,3 +1,5 @@
+pub(crate) mod bw_host;
+pub(crate) mod benchmark;
 mod compiler;
 mod error;
 pub mod host;

@@ -47,6 +47,7 @@ impl Default for NativeRegistry {
             let id = runtime.next_object;
             runtime.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
             runtime.objects.insert(id, BTreeMap::new());
+            runtime.benchmark.allocations+=1;
             Ok(Value::Object(id))
         });
         natives::iw4::register(&mut registry);
@@ -67,6 +68,7 @@ impl Default for NativeRegistry {
         super::turrets::register(&mut registry);
         super::triggers::register(&mut registry);
         super::spectators::register(&mut registry);
+        crate::script::bw_host::register(&mut registry);
         registry
     }
 }

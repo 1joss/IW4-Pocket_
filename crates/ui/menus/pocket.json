@@ -97,23 +97,23 @@
     "fields": {
      "item_type": 12,
      "static_flags": 0,
-     "dvar": "ui_pocket_tier",
+     "dvar": "ui_pocket_bwprofile",
      "choices": [
       [
        "Auto",
        "auto"
       ],
       [
-       "Low",
-       "low"
+       "Summary",
+       "summary"
       ],
       [
-       "Medium",
-       "mid"
+       "Detailed",
+       "detail"
       ],
       [
-       "High",
-       "high"
+       "Off",
+       "off"
       ]
      ],
      "vis_exp": "1",
@@ -161,6 +161,135 @@
       0,
       0
      ],
+     "name": "ui_pocket_bwprofile"
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "Bot Warfare diagnostics",
+     "rect": {
+      "x": 232,
+      "y": 28,
+      "w": 344,
+      "h": 20
+     },
+     "text_scale": 0.32,
+     "name": "ui_pocket_bwprofile_label"
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "Summary measures performance. Detailed captures",
+     "rect": {
+      "x": 232,
+      "y": 43,
+      "w": 344,
+      "h": 10
+     },
+     "text_scale": 0.21,
+     "name": "ui_pocket_bwprofile_desc0",
+     "fore_color": [
+      0.75,
+      0.75,
+      0.75,
+      1
+     ]
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "script inputs and outputs. Restart to apply.",
+     "rect": {
+      "x": 232,
+      "y": 52,
+      "w": 344,
+      "h": 10
+     },
+     "text_scale": 0.21,
+     "name": "ui_pocket_bwprofile_desc1",
+     "fore_color": [
+      0.75,
+      0.75,
+      0.75,
+      1
+     ]
+    }
+   },
+   {
+    "name": "video_display_mode",
+    "fields": {
+     "item_type": 12,
+     "static_flags": 0,
+     "dvar": "ui_pocket_tier",
+     "choices": [
+      [
+       "Auto",
+       "auto"
+      ],
+      [
+       "Low",
+       "low"
+      ],
+      [
+       "Medium",
+       "mid"
+      ],
+      [
+       "High",
+       "high"
+      ]
+     ],
+     "vis_exp": "1",
+     "disabled_exp": "0",
+     "text_key": "",
+     "text_exp": "",
+     "text_align_mode": 10,
+     "text_align_x": -8,
+     "text_align_y": 0,
+     "fore_color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "rect": {
+      "x": 232,
+      "y": 60,
+      "w": 344,
+      "h": 20
+     },
+     "handlers": {
+      "action": [
+       {
+        "Script": "play mouse_click;"
+       }
+      ],
+      "focus": [
+       {
+        "Script": "play mouse_over; setItemColor self backcolor 0 0 0 1;"
+       }
+      ],
+      "leave_focus": [
+       {
+        "Script": "setItemColor self backcolor 0 0 0 0;"
+       }
+      ]
+     },
+     "text_scale": 0.375,
+     "style": 1,
+     "background": "menu_button_selection_bar",
+     "back_color": [
+      0,
+      0,
+      0,
+      0
+     ],
      "name": "ui_pocket_tier"
     }
    },
@@ -171,7 +300,7 @@
      "text_key": "Device profile",
      "rect": {
       "x": 232,
-      "y": 28,
+      "y": 60,
       "w": 344,
       "h": 20
      },
@@ -186,7 +315,7 @@
      "text_key": "Memory preset for this phone.",
      "rect": {
       "x": 232,
-      "y": 43,
+      "y": 75,
       "w": 344,
       "h": 10
      },
@@ -207,7 +336,7 @@
      "text_key": "Auto picks it from the memory iOS gives the app.",
      "rect": {
       "x": 232,
-      "y": 52,
+      "y": 84,
       "w": 344,
       "h": 10
      },
@@ -276,7 +405,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 64,
+      "y": 92,
       "w": 344,
       "h": 20
      },
@@ -316,7 +445,7 @@
      "text_key": "Render scale",
      "rect": {
       "x": 232,
-      "y": 64,
+      "y": 92,
       "w": 344,
       "h": 20
      },
@@ -331,7 +460,7 @@
      "text_key": "Game resolution. Lower is blurrier but faster.",
      "rect": {
       "x": 232,
-      "y": 79,
+      "y": 107,
       "w": 344,
       "h": 10
      },
@@ -352,7 +481,7 @@
      "text_key": "It frees only a little memory.",
      "rect": {
       "x": 232,
-      "y": 88,
+      "y": 116,
       "w": 344,
       "h": 10
      },
@@ -405,7 +534,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 100,
+      "y": 124,
       "w": 344,
       "h": 20
      },
@@ -445,7 +574,7 @@
      "text_key": "Frame limit",
      "rect": {
       "x": 232,
-      "y": 100,
+      "y": 124,
       "w": 344,
       "h": 20
      },
@@ -460,7 +589,7 @@
      "text_key": "Caps frames per second.",
      "rect": {
       "x": 232,
-      "y": 115,
+      "y": 139,
       "w": 344,
       "h": 10
      },
@@ -481,7 +610,7 @@
      "text_key": "Lower runs cooler and saves battery.",
      "rect": {
       "x": 232,
-      "y": 124,
+      "y": 148,
       "w": 344,
       "h": 10
      },
@@ -538,7 +667,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 136,
+      "y": 156,
       "w": 344,
       "h": 20
      },
@@ -578,7 +707,7 @@
      "text_key": "Texture size",
      "rect": {
       "x": 232,
-      "y": 136,
+      "y": 156,
       "w": 344,
       "h": 20
      },
@@ -593,7 +722,7 @@
      "text_key": "Largest texture size kept in memory.",
      "rect": {
       "x": 232,
-      "y": 151,
+      "y": 171,
       "w": 344,
       "h": 10
      },
@@ -614,7 +743,7 @@
      "text_key": "Smaller frees memory but looks softer.",
      "rect": {
       "x": 232,
-      "y": 160,
+      "y": 180,
       "w": 344,
       "h": 10
      },
@@ -663,7 +792,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 172,
+      "y": 188,
       "w": 344,
       "h": 20
      },
@@ -703,7 +832,7 @@
      "text_key": "Lean shaders",
      "rect": {
       "x": 232,
-      "y": 172,
+      "y": 188,
       "w": 344,
       "h": 20
      },
@@ -718,7 +847,7 @@
      "text_key": "Frees shader data once the map has loaded.",
      "rect": {
       "x": 232,
-      "y": 187,
+      "y": 203,
       "w": 344,
       "h": 10
      },
@@ -739,7 +868,7 @@
      "text_key": "Off uses much more memory.",
      "rect": {
       "x": 232,
-      "y": 196,
+      "y": 212,
       "w": 344,
       "h": 10
      },
@@ -788,7 +917,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 208,
+      "y": 220,
       "w": 344,
       "h": 20
      },
@@ -828,7 +957,7 @@
      "text_key": "Weapon camo skins",
      "rect": {
       "x": 232,
-      "y": 208,
+      "y": 220,
       "w": 344,
       "h": 20
      },
@@ -843,7 +972,7 @@
      "text_key": "Skip removes camo skins from guns.",
      "rect": {
       "x": 232,
-      "y": 223,
+      "y": 235,
       "w": 344,
       "h": 10
      },
@@ -864,7 +993,7 @@
      "text_key": "In tests it did not save memory.",
      "rect": {
       "x": 232,
-      "y": 232,
+      "y": 244,
       "w": 344,
       "h": 10
      },
@@ -913,7 +1042,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 244,
+      "y": 252,
       "w": 344,
       "h": 20
      },
@@ -953,7 +1082,7 @@
      "text_key": "Frames in flight",
      "rect": {
       "x": 232,
-      "y": 244,
+      "y": 252,
       "w": 344,
       "h": 20
      },
@@ -968,7 +1097,7 @@
      "text_key": "Frames the phone prepares ahead.",
      "rect": {
       "x": 232,
-      "y": 259,
+      "y": 267,
       "w": 344,
       "h": 10
      },
@@ -989,7 +1118,7 @@
      "text_key": "1 uses less memory, 2 is smoother.",
      "rect": {
       "x": 232,
-      "y": 268,
+      "y": 276,
       "w": 344,
       "h": 10
      },
@@ -1004,138 +1133,13 @@
     }
    },
    {
-    "name": "video_display_mode",
-    "fields": {
-     "item_type": 12,
-     "static_flags": 0,
-     "dvar": "ui_pocket_promotion",
-     "choices": [
-      [
-       "Auto",
-       "auto"
-      ],
-      [
-       "On",
-       "on"
-      ],
-      [
-       "Off",
-       "off"
-      ]
-     ],
-     "vis_exp": "1",
-     "disabled_exp": "0",
-     "text_key": "",
-     "text_exp": "",
-     "text_align_mode": 10,
-     "text_align_x": -8,
-     "text_align_y": 0,
-     "fore_color": [
-      1,
-      1,
-      1,
-      1
-     ],
-     "rect": {
-      "x": 232,
-      "y": 280,
-      "w": 344,
-      "h": 20
-     },
-     "handlers": {
-      "action": [
-       {
-        "Script": "play mouse_click;"
-       }
-      ],
-      "focus": [
-       {
-        "Script": "play mouse_over; setItemColor self backcolor 0 0 0 1;"
-       }
-      ],
-      "leave_focus": [
-       {
-        "Script": "setItemColor self backcolor 0 0 0 0;"
-       }
-      ]
-     },
-     "text_scale": 0.375,
-     "style": 1,
-     "background": "menu_button_selection_bar",
-     "back_color": [
-      0,
-      0,
-      0,
-      0
-     ],
-     "name": "ui_pocket_promotion"
-    }
-   },
-   {
-    "name": "video_display_mode_label",
-    "fields": {
-     "vis_exp": "1",
-     "text_key": "120 Hz in matches",
-     "rect": {
-      "x": 232,
-      "y": 280,
-      "w": 344,
-      "h": 20
-     },
-     "text_scale": 0.32,
-     "name": "ui_pocket_promotion_label"
-    }
-   },
-   {
-    "name": "video_display_mode_label",
-    "fields": {
-     "vis_exp": "1",
-     "text_key": "Asks for 120 Hz during matches on phones",
-     "rect": {
-      "x": 232,
-      "y": 295,
-      "w": 344,
-      "h": 10
-     },
-     "text_scale": 0.21,
-     "name": "ui_pocket_promotion_desc0",
-     "fore_color": [
-      0.75,
-      0.75,
-      0.75,
-      1
-     ]
-    }
-   },
-   {
-    "name": "video_display_mode_label",
-    "fields": {
-     "vis_exp": "1",
-     "text_key": "that support it. Off stays at 60 Hz.",
-     "rect": {
-      "x": 232,
-      "y": 304,
-      "w": 344,
-      "h": 10
-     },
-     "text_scale": 0.21,
-     "name": "ui_pocket_promotion_desc1",
-     "fore_color": [
-      0.75,
-      0.75,
-      0.75,
-      1
-     ]
-    }
-   },
-   {
     "name": "video_display_mode_label",
     "fields": {
      "vis_exp": "1",
      "text_key": "",
      "rect": {
       "x": 232,
-      "y": 318,
+      "y": 286,
       "w": 344,
       "h": 20
      },
@@ -1172,7 +1176,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 340,
+      "y": 308,
       "w": 344,
       "h": 20
      },
@@ -1227,7 +1231,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 362,
+      "y": 330,
       "w": 344,
       "h": 20
      },
@@ -1267,7 +1271,7 @@
      "text_key": "Report a problem on GitHub",
      "rect": {
       "x": 232,
-      "y": 362,
+      "y": 330,
       "w": 344,
       "h": 20
      },
@@ -1282,7 +1286,7 @@
      "text_key": "",
      "rect": {
       "x": 232,
-      "y": 384,
+      "y": 352,
       "w": 344,
       "h": 20
      },
@@ -1397,27 +1401,19 @@
     "fields": {
      "item_type": 12,
      "static_flags": 0,
-     "dvar": "ui_pocket_promodelay",
+     "dvar": "ui_pocket_promotion",
      "choices": [
       [
        "Auto",
        "auto"
       ],
       [
-       "0",
-       "0"
+       "On",
+       "on"
       ],
       [
-       "30",
-       "30"
-      ],
-      [
-       "60",
-       "60"
-      ],
-      [
-       "120",
-       "120"
+       "Off",
+       "off"
       ]
      ],
      "vis_exp": "1",
@@ -1465,6 +1461,139 @@
       0,
       0
      ],
+     "name": "ui_pocket_promotion"
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "120 Hz in matches",
+     "rect": {
+      "x": 232,
+      "y": 28,
+      "w": 344,
+      "h": 20
+     },
+     "text_scale": 0.32,
+     "name": "ui_pocket_promotion_label"
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "Asks for 120 Hz during matches on phones",
+     "rect": {
+      "x": 232,
+      "y": 43,
+      "w": 344,
+      "h": 10
+     },
+     "text_scale": 0.21,
+     "name": "ui_pocket_promotion_desc0",
+     "fore_color": [
+      0.75,
+      0.75,
+      0.75,
+      1
+     ]
+    }
+   },
+   {
+    "name": "video_display_mode_label",
+    "fields": {
+     "vis_exp": "1",
+     "text_key": "that support it. Off stays at 60 Hz.",
+     "rect": {
+      "x": 232,
+      "y": 52,
+      "w": 344,
+      "h": 10
+     },
+     "text_scale": 0.21,
+     "name": "ui_pocket_promotion_desc1",
+     "fore_color": [
+      0.75,
+      0.75,
+      0.75,
+      1
+     ]
+    }
+   },
+   {
+    "name": "video_display_mode",
+    "fields": {
+     "item_type": 12,
+     "static_flags": 0,
+     "dvar": "ui_pocket_promodelay",
+     "choices": [
+      [
+       "Auto",
+       "auto"
+      ],
+      [
+       "0",
+       "0"
+      ],
+      [
+       "30",
+       "30"
+      ],
+      [
+       "60",
+       "60"
+      ],
+      [
+       "120",
+       "120"
+      ]
+     ],
+     "vis_exp": "1",
+     "disabled_exp": "0",
+     "text_key": "",
+     "text_exp": "",
+     "text_align_mode": 10,
+     "text_align_x": -8,
+     "text_align_y": 0,
+     "fore_color": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "rect": {
+      "x": 232,
+      "y": 60,
+      "w": 344,
+      "h": 20
+     },
+     "handlers": {
+      "action": [
+       {
+        "Script": "play mouse_click;"
+       }
+      ],
+      "focus": [
+       {
+        "Script": "play mouse_over; setItemColor self backcolor 0 0 0 1;"
+       }
+      ],
+      "leave_focus": [
+       {
+        "Script": "setItemColor self backcolor 0 0 0 0;"
+       }
+      ]
+     },
+     "text_scale": 0.375,
+     "style": 1,
+     "background": "menu_button_selection_bar",
+     "back_color": [
+      0,
+      0,
+      0,
+      0
+     ],
      "name": "ui_pocket_promodelay"
     }
    },
@@ -1475,7 +1604,7 @@
      "text_key": "120 Hz delay (s)",
      "rect": {
       "x": 232,
-      "y": 28,
+      "y": 60,
       "w": 344,
       "h": 20
      },
@@ -1490,7 +1619,7 @@
      "text_key": "Seconds at 60 Hz in a match",
      "rect": {
       "x": 232,
-      "y": 43,
+      "y": 75,
       "w": 344,
       "h": 10
      },
@@ -1511,7 +1640,7 @@
      "text_key": "before switching to 120 Hz.",
      "rect": {
       "x": 232,
-      "y": 52,
+      "y": 84,
       "w": 344,
       "h": 10
      },
@@ -1556,7 +1685,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 64,
+      "y": 92,
       "w": 344,
       "h": 20
      },
@@ -1596,7 +1725,7 @@
      "text_key": "Compressed textures",
      "rect": {
       "x": 232,
-      "y": 64,
+      "y": 92,
       "w": 344,
       "h": 20
      },
@@ -1611,7 +1740,7 @@
      "text_key": "Auto keeps textures compressed.",
      "rect": {
       "x": 232,
-      "y": 79,
+      "y": 107,
       "w": 344,
       "h": 10
      },
@@ -1632,7 +1761,7 @@
      "text_key": "Off uses a lot more memory; for tests only.",
      "rect": {
       "x": 232,
-      "y": 88,
+      "y": 116,
       "w": 344,
       "h": 10
      },
@@ -1681,7 +1810,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 100,
+      "y": 124,
       "w": 344,
       "h": 20
      },
@@ -1721,7 +1850,7 @@
      "text_key": "Dynamic shadows",
      "rect": {
       "x": 232,
-      "y": 100,
+      "y": 124,
       "w": 344,
       "h": 20
      },
@@ -1736,7 +1865,7 @@
      "text_key": "Auto turns them off if the phone cannot",
      "rect": {
       "x": 232,
-      "y": 115,
+      "y": 139,
       "w": 344,
       "h": 10
      },
@@ -1757,7 +1886,7 @@
      "text_key": "draw them. On forces them.",
      "rect": {
       "x": 232,
-      "y": 124,
+      "y": 148,
       "w": 344,
       "h": 10
      },
@@ -1806,7 +1935,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 136,
+      "y": 156,
       "w": 344,
       "h": 20
      },
@@ -1846,7 +1975,7 @@
      "text_key": "Replay clip buffer",
      "rect": {
       "x": 232,
-      "y": 136,
+      "y": 156,
       "w": 344,
       "h": 20
      },
@@ -1861,7 +1990,7 @@
      "text_key": "Keeps the last 45 seconds for clips.",
      "rect": {
       "x": 232,
-      "y": 151,
+      "y": 171,
       "w": 344,
       "h": 10
      },
@@ -1882,7 +2011,7 @@
      "text_key": "Off frees that memory.",
      "rect": {
       "x": 232,
-      "y": 160,
+      "y": 180,
       "w": 344,
       "h": 10
      },
@@ -1931,7 +2060,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 172,
+      "y": 188,
       "w": 344,
       "h": 20
      },
@@ -1971,7 +2100,7 @@
      "text_key": "On-screen controls",
      "rect": {
       "x": 232,
-      "y": 172,
+      "y": 188,
       "w": 344,
       "h": 20
      },
@@ -1986,7 +2115,7 @@
      "text_key": "Touch buttons on the screen. Auto shows",
      "rect": {
       "x": 232,
-      "y": 187,
+      "y": 203,
       "w": 344,
       "h": 10
      },
@@ -2007,7 +2136,7 @@
      "text_key": "them only when no controller is connected.",
      "rect": {
       "x": 232,
-      "y": 196,
+      "y": 212,
       "w": 344,
       "h": 10
      },
@@ -2056,7 +2185,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 208,
+      "y": 220,
       "w": 344,
       "h": 20
      },
@@ -2096,7 +2225,7 @@
      "text_key": "Diagnostics",
      "rect": {
       "x": 232,
-      "y": 208,
+      "y": 220,
       "w": 344,
       "h": 20
      },
@@ -2111,7 +2240,7 @@
      "text_key": "Normal keeps the log short: no per-frame or bot detail.",
      "rect": {
       "x": 232,
-      "y": 223,
+      "y": 235,
       "w": 344,
       "h": 10
      },
@@ -2132,7 +2261,7 @@
      "text_key": "Detailed writes everything, for bug reports.",
      "rect": {
       "x": 232,
-      "y": 232,
+      "y": 244,
       "w": 344,
       "h": 10
      },
@@ -2189,7 +2318,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 244,
+      "y": 252,
       "w": 344,
       "h": 20
      },
@@ -2229,7 +2358,7 @@
      "text_key": "Text/UI sharpness",
      "rect": {
       "x": 232,
-      "y": 244,
+      "y": 252,
       "w": 344,
       "h": 20
      },
@@ -2244,7 +2373,7 @@
      "text_key": "Auto is Medium: sharp text and menus when the 3D scale",
      "rect": {
       "x": 232,
-      "y": 259,
+      "y": 267,
       "w": 344,
       "h": 10
      },
@@ -2265,7 +2394,7 @@
      "text_key": "is below 0.6. If the screen goes black, set Off.",
      "rect": {
       "x": 232,
-      "y": 268,
+      "y": 276,
       "w": 344,
       "h": 10
      },
@@ -2314,7 +2443,7 @@
      ],
      "rect": {
       "x": 232,
-      "y": 280,
+      "y": 284,
       "w": 344,
       "h": 20
      },
@@ -2354,7 +2483,7 @@
      "text_key": "Selective weapon loading",
      "rect": {
       "x": 232,
-      "y": 280,
+      "y": 284,
       "w": 344,
       "h": 20
      },
@@ -2369,7 +2498,7 @@
      "text_key": "Auto loads only the weapons in use on Low memory.",
      "rect": {
       "x": 232,
-      "y": 295,
+      "y": 299,
       "w": 344,
       "h": 10
      },
@@ -2390,7 +2519,7 @@
      "text_key": "Off loads every weapon (more memory).",
      "rect": {
       "x": 232,
-      "y": 304,
+      "y": 308,
       "w": 344,
       "h": 10
      },

@@ -264,6 +264,7 @@ fn apply_actions_system(world: &mut World) {
 }
 
 fn run_players_system(ecs: &mut World) {
+    crate::script::bw_host::emit_commands(ecs);
     let tick = ecs.resource::<StepRequest>().tick;
     let level_time = crate::level_time_ms(tick);
     let input = ecs.resource::<StepRequest>().input.clone();

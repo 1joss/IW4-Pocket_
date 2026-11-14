@@ -248,6 +248,7 @@ pub fn valid_file_setting(name: &str, value: &str) -> bool {
         // Log detail (see detail.rs, `DIAG_ENV`): normal drops per-frame/per-tick lines.
         // A literal, not the constant: CI compiles this file on its own (`rustc --test`),
         // so it cannot reach other modules of the crate.
+        "IW4L_BW_PROFILE" => matches!(value, "off" | "summary" | "detail"),
         "IW4L_DIAG" => matches!(value, "normal" | "detailed"),
         // Text/UI sharpness (bootstrap::text_sharpness) and selective weapon loading
         // (assets::weapon_residency::config); same values their parsers accept.

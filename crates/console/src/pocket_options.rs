@@ -25,9 +25,24 @@ pub(crate) struct Opt {
 /// Keep in step with `OPTIONS` in tools/gen_pocket_menu.py (a test checks this).
 pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
+        dvar: "ui_pocket_bwprofile",
+        env: "IW4L_BW_PROFILE",
+        map: &[
+            ("auto", None),
+            ("summary", Some("summary")),
+            ("detail", Some("detail")),
+            ("off", Some("off")),
+        ],
+    },
+    Opt {
         dvar: "ui_pocket_tier",
         env: diag::memory_settings::TIER_ENV,
-        map: &[("auto", None), ("low", Some("low")), ("mid", Some("mid")), ("high", Some("high"))],
+        map: &[
+            ("auto", None),
+            ("low", Some("low")),
+            ("mid", Some("mid")),
+            ("high", Some("high")),
+        ],
     },
     Opt {
         dvar: "ui_pocket_scale",
@@ -46,7 +61,12 @@ pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
         dvar: "ui_pocket_pace",
         env: "IW4L_FRAME_PACE",
-        map: &[("auto", None), ("30", Some("30")), ("40", Some("40")), ("60", Some("60"))],
+        map: &[
+            ("auto", None),
+            ("30", Some("30")),
+            ("40", Some("40")),
+            ("60", Some("60")),
+        ],
     },
     Opt {
         dvar: "ui_pocket_texture",
@@ -82,7 +102,13 @@ pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
         dvar: "ui_pocket_promodelay",
         env: "IW4L_PROMOTION_DELAY",
-        map: &[("auto", None), ("0", Some("0")), ("30", Some("30")), ("60", Some("60")), ("120", Some("120"))],
+        map: &[
+            ("auto", None),
+            ("0", Some("0")),
+            ("30", Some("30")),
+            ("60", Some("60")),
+            ("120", Some("120")),
+        ],
     },
     Opt {
         dvar: "ui_pocket_bc",
@@ -107,7 +133,11 @@ pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
         dvar: "ui_pocket_diag",
         env: diag::detail::DIAG_ENV,
-        map: &[("auto", None), ("normal", Some("normal")), ("detailed", Some("detailed"))],
+        map: &[
+            ("auto", None),
+            ("normal", Some("normal")),
+            ("detailed", Some("detailed")),
+        ],
     },
     // Env names are literals: bootstrap's TEXT_SHARPNESS_ENV is pub(crate) and
     // assets::weapon_residency::config::ENV_VAR is not a console dependency to keep in sync
@@ -115,7 +145,13 @@ pub(crate) const OPTIONS: &[Opt] = &[
     Opt {
         dvar: "ui_pocket_sharp",
         env: "IW4L_TEXT_SHARPNESS",
-        map: &[("auto", None), ("off", Some("off")), ("native", Some("native")), ("high", Some("high")), ("medium", Some("medium"))],
+        map: &[
+            ("auto", None),
+            ("off", Some("off")),
+            ("native", Some("native")),
+            ("high", Some("high")),
+            ("medium", Some("medium")),
+        ],
     },
     Opt {
         dvar: "ui_pocket_weapons",
@@ -140,7 +176,10 @@ pub(crate) fn menu_value(opt: &Opt, file_value: Option<&str>) -> &'static str {
 /// What a menu value writes: `Some(None)` removes the line, `Some(Some(v))` sets it,
 /// `None` means the menu value is not one of this row's choices.
 pub(crate) fn env_value(opt: &Opt, shown: &str) -> Option<Option<&'static str>> {
-    opt.map.iter().find(|(s, _)| *s == shown).map(|(_, env)| *env)
+    opt.map
+        .iter()
+        .find(|(s, _)| *s == shown)
+        .map(|(_, env)| *env)
 }
 
 /// Keeps the bot count in `iw4l-env.txt` (iOS), so the next launch starts with it.
@@ -149,8 +188,14 @@ pub(crate) fn save_bots(n: u32) {
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let value = (n > 0).then(|| n.to_string());
     let updated = diag::ios_env::merge_env_lines(&existing, &[("IW4L_BOTS", value.as_deref())]);
-    if updated != existing && let Err(error) = std::fs::write(&path, updated) {
-        diag::warn!(Console, "pocket options: could not save {}: {error}", path.display());
+    if updated != existing
+        && let Err(error) = std::fs::write(&path, updated)
+    {
+        diag::warn!(
+            Console,
+            "pocket options: could not save {}: {error}",
+            path.display()
+        );
     }
 }
 
@@ -192,7 +237,10 @@ pub(crate) fn pocket_options_menu(
             .and_then(|path| std::fs::read_to_string(path).ok())
             .unwrap_or_default();
         for opt in OPTIONS {
-            let shown = menu_value(opt, diag::ios_env::env_file_value(&text, opt.env).as_deref());
+            let shown = menu_value(
+                opt,
+                diag::ios_env::env_file_value(&text, opt.env).as_deref(),
+            );
             dvars.set(opt.dvar, shown);
             state.launched.push(shown);
             state.current.push(shown);
@@ -221,7 +269,10 @@ pub(crate) fn pocket_options_menu(
             }
             continue;
         }
-        let Some(at) = OPTIONS.iter().position(|o| o.dvar.eq_ignore_ascii_case(name)) else {
+        let Some(at) = OPTIONS
+            .iter()
+            .position(|o| o.dvar.eq_ignore_ascii_case(name))
+        else {
             continue;
         };
         let opt = &OPTIONS[at];
@@ -231,8 +282,14 @@ pub(crate) fn pocket_options_menu(
         if let Some(path) = env_path() {
             let existing = std::fs::read_to_string(&path).unwrap_or_default();
             let updated = diag::ios_env::merge_env_lines(&existing, &[(opt.env, env)]);
-            if updated != existing && let Err(error) = std::fs::write(&path, updated) {
-                diag::warn!(Console, "pocket options: could not save {}: {error}", path.display());
+            if updated != existing
+                && let Err(error) = std::fs::write(&path, updated)
+            {
+                diag::warn!(
+                    Console,
+                    "pocket options: could not save {}: {error}",
+                    path.display()
+                );
             }
         }
         state.current[at] = menu_value(opt, env);
@@ -256,7 +313,10 @@ fn info_line() -> String {
     let settings = diag::memory_settings::get();
     let granted = diag::memory_settings::granted_mib();
     if granted > 0 {
-        format!("iOS gives this app {granted} MB. Profile in use: {}.", settings.tier.name())
+        format!(
+            "iOS gives this app {granted} MB. Profile in use: {}.",
+            settings.tier.name()
+        )
     } else {
         format!("Profile in use: {}.", settings.tier.name())
     }
@@ -305,7 +365,10 @@ pub(crate) fn build_report_url(log: &str) -> String {
             summary.push(format!("- {line}"));
         }
     }
-    if let Some(at) = log.lines().position(|line| line.starts_with("RENDER ERROR")) {
+    if let Some(at) = log
+        .lines()
+        .position(|line| line.starts_with("RENDER ERROR"))
+    {
         let error: Vec<&str> = log.lines().skip(at).take(5).map(str::trim).collect();
         summary.push(format!("- {}", error.join(" ")));
     }
@@ -391,12 +454,11 @@ mod tests {
     fn changing_one_row_keeps_the_rest_of_the_file() {
         let o = opt("ui_pocket_tier");
         let before = "# keep\nIW4L_SOUND=off\n";
-        let after = diag::ios_env::merge_env_lines(
-            before,
-            &[(o.env, env_value(o, "low").unwrap())],
-        );
+        let after =
+            diag::ios_env::merge_env_lines(before, &[(o.env, env_value(o, "low").unwrap())]);
         assert_eq!(after, "# keep\nIW4L_SOUND=off\nIW4L_TIER=low\n");
-        let back = diag::ios_env::merge_env_lines(&after, &[(o.env, env_value(o, "auto").unwrap())]);
+        let back =
+            diag::ios_env::merge_env_lines(&after, &[(o.env, env_value(o, "auto").unwrap())]);
         assert_eq!(back, before);
     }
 
@@ -406,7 +468,10 @@ mod tests {
         assert_eq!(env_value(o, "auto"), Some(None));
         assert_eq!(env_value(o, "detailed"), Some(Some("detailed")));
         for (_, value) in o.map.iter().filter_map(|(s, v)| v.map(|v| (s, v))) {
-            assert!(diag::memory_settings::valid_file_setting(o.env, value), "{value}");
+            assert!(
+                diag::memory_settings::valid_file_setting(o.env, value),
+                "{value}"
+            );
         }
     }
 

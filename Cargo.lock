@@ -6021,6 +6021,7 @@ dependencies = [
  "movement_iw4",
  "perf",
  "playerstate_iw4",
+ "serde_json",
  "sha2",
  "structured_data_iw4",
  "trace_iw4",

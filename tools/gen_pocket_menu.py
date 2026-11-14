@@ -16,6 +16,9 @@ label_t = ctrl["item_copies"][1]
 
 # dvar, label, description (two short lines, shown under the row), [(shown, value)]
 OPTIONS = [
+    ("ui_pocket_bwprofile", "Bot Warfare diagnostics",
+     ("Summary measures performance. Detailed captures", "script inputs and outputs. Restart to apply."),
+     [("Auto", "auto"), ("Summary", "summary"), ("Detailed", "detail"), ("Off", "off")]),
     ("ui_pocket_tier", "Device profile",
      ("Memory preset for this phone.", "Auto picks it from the memory iOS gives the app."),
      [("Auto", "auto"), ("Low", "low"), ("Medium", "mid"), ("High", "high")]),
@@ -67,7 +70,7 @@ OPTIONS = [
      [("Auto", "auto"), ("On", "on"), ("Off", "off")]),
 ]
 
-ROW = 36          # distance between two rows (it was 23: descriptions need room)
+ROW = 32          # distance between two rows (it was 23: descriptions need room)
 FIRST_Y = 28
 DESC_DY = (15, 24)  # the two description lines sit under the row, right below its name
 

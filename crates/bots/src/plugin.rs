@@ -107,38 +107,42 @@ impl Plugin for BotsPlugin {
             .init_resource::<BotHold>()
             .init_resource::<BotTpQueue>()
             .init_resource::<BotFireQueue>()
-            .init_resource::<BotNav>()
-            .init_resource::<BotNavigationReady>()
-            .init_resource::<BotMeter>()
-            .init_resource::<BotAutoFill>()
             .init_resource::<BotWanted>()
+            .init_resource::<BotNavigationReady>()
             .init_resource::<net::ReservedClientIds>()
-            .add_systems(
-                Update,
-                (
-                    auto_fill_bots,
-                    drain_bot_add_queue,
-                    publish_reserved_ids,
-                    evict_bots_claiming_local_client,
-                    boot_bots,
-                    apply_bot_tp,
-                )
-                    .chain()
-                    .after(ClientSet::Load),
-            )
-            .add_systems(
-                Update,
-                (reset_roster_on_match_torn_down, prepare_navigation)
-                    .chain()
-                    .in_set(ClientSet::Load),
-            )
-            .add_systems(
-                FixedUpdate,
-                (evict_bots_claiming_local_client, think_bots)
-                    .chain()
-                    .in_set(AuthoritySet::Ingress)
-                    .run_if(authority_should_tick),
-            );
+            .add_systems(Update, bw_host_settings.after(ClientSet::Load));
+    }
+}
+fn bw_host_settings(
+    role: Res<RuntimeRole>,
+    mut wanted: ResMut<BotWanted>,
+    mut additions: ResMut<BotAddQueue>,
+    mut ready: ResMut<BotNavigationReady>,
+    generation: Res<frame::WorldGeneration>,
+    world: Option<ResMut<AuthorityWorld>>,
+    installed: Option<Res<HasWorld>>,
+    mut reserved: ResMut<net::ReservedClientIds>,
+    mut reliable: ResMut<ReliableEventHub>,
+) {
+    ready.0 = frame::WorldReadiness::new(*generation, frame::ReadinessState::Ready);
+    if !role.runs_authority() || !installed.is_some_and(|w| w.0) {
+        reserved.0.clear();
+        return;
+    }
+    for request in additions.drain() {
+        wanted.0 = wanted.0.saturating_add(request.count).min(17);
+    }
+    if let Some(mut world) = world {
+        world.0.set_bot_warfare_count(wanted.0.min(17));
+        reserved.0 = world
+            .0
+            .bot_warfare_clients()
+            .into_iter()
+            .map(|id| id.0)
+            .collect();
+        for id in &reserved.0 {
+            reliable.ack_all(sim::ClientId(*id));
+        }
     }
 }
 
@@ -278,9 +282,20 @@ fn drain_bot_add_queue(
             request.dummy,
             added.iter().map(|id| id.0).collect::<Vec<_>>()
         );
-        let names: Vec<(u32, &str)> = roster.bots.iter().filter(|b| added.contains(&b.id)).map(|b| (b.id.0, b.name)).collect();
+        let names: Vec<(u32, &str)> = roster
+            .bots
+            .iter()
+            .filter(|b| added.contains(&b.id))
+            .map(|b| (b.id.0, b.name))
+            .collect();
         let refusal = (added.len() < count as usize).then_some("roster full");
-        diag::events::bots_event(count, added.len() as u32, roster.bots.len() as u32, refusal, &names);
+        diag::events::bots_event(
+            count,
+            added.len() as u32,
+            roster.bots.len() as u32,
+            refusal,
+            &names,
+        );
     }
 }
 
@@ -301,7 +316,11 @@ fn evict_bots_claiming_local_client(
     if bot.joined {
         let request_id = request_ids.allocate();
         if let Err(error) = actions.push(bot.id, ClientAction::LeaveMatch { request_id }) {
-            diag::warn!(Sim, "bots: client {} leave was not queued: {error}", bot.id.0);
+            diag::warn!(
+                Sim,
+                "bots: client {} leave was not queued: {error}",
+                bot.id.0
+            );
         }
     }
     if let Some(mut world) = world {
@@ -661,7 +680,9 @@ fn log_bot_snapshots(roster: &BotRoster, tick: u32) {
             pos[2],
             task.kind,
             task.reason,
-            intent.move_goal.map(|g| [g[0].round(), g[1].round(), g[2].round()]),
+            intent
+                .move_goal
+                .map(|g| [g[0].round(), g[1].round(), g[2].round()]),
             intent.path,
             brain.stuck(tick),
             brain.report(),

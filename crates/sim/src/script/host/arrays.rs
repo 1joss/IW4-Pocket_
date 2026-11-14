@@ -18,6 +18,7 @@ pub(crate) fn array_values(world: &World, value: &Value) -> Result<Vec<Value>, S
 
 pub(crate) fn new_array(world: &mut World, values: Vec<Value>) -> Result<Value, String> {
     let mut runtime = world.resource_mut::<Runtime>();
+    runtime.benchmark.allocations+=1;
     let id = runtime.next_object;
     runtime.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
     runtime.arrays.insert(

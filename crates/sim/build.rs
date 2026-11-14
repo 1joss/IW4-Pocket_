@@ -7,6 +7,41 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
+    let root =
+        std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("bot_warfare");
+    fn scan(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_dir() {
+                scan(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    scan(&root, &mut files);
+    files.sort();
+    let mut generated = String::from("pub static FILES: &[(&str, &[u8])] = &[\n");
+    for file in files {
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace('\\', "/");
+        generated.push_str(&format!(
+            "({rel:?}, include_bytes!({:?})),\n",
+            file.to_str().unwrap()
+        ));
+    }
+    generated.push_str("];\n");
+    std::fs::write(
+        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bot_warfare_files.rs"),
+        generated,
+    )
+    .unwrap();
+    println!("cargo::rerun-if-changed=bot_warfare");
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=IW4L_BUILD_NUMBER");
     let tracked = git(&["ls-files", "--error-unmatch", "Cargo.toml"]).is_some();

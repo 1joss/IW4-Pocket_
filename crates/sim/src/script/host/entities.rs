@@ -254,6 +254,7 @@ impl Runtime {
     }
 
     pub(crate) fn new_object(&mut self) -> Result<u64, String> {
+        self.benchmark.allocations+=1;
         let id = self.next_object;
         self.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
         self.objects.insert(id, BTreeMap::new());
