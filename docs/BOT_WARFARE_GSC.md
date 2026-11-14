@@ -59,7 +59,7 @@ Each map gets a timestamped session with:
   maxima, per-function instructions and self time, per-native counts/time/errors,
   allocations, GC time and diagnostic/bridge overhead. Normal teardown writes
   the final partial window.
-- Detailed additionally records scheduler frames, script resumptions, source-line
+- Detailed additionally records scheduler frames, script resumptions, explicit script-object/client mappings, source-line
   instruction counts, engine calls/results (bounded result snapshots) and the
   generated per-bot command stream. This helps isolate routing, target selection,
   aiming and engine-boundary behavior before translating individual systems.
@@ -110,7 +110,7 @@ optimization or on-device gameplay issue has been diagnosed already.
 ## Validation
 
 - `cargo test -p sim --lib`: simulation, held-action/human isolation, respawn input
-  reset, nested GSC profiling/error accounting and bounded diagnostic queue tests.
+  reset, temporary bot admission/connect/begin/disconnect/slot reuse, nested GSC profiling/error accounting and bounded diagnostic queue tests.
 - `cargo check -p console`: complete desktop application dependency integration.
 - Import/analyzer, iOS memory/package/menu and release-source contract tests.
 - `cargo run -p sim --example bw_compile -- <stock-script-root>` compiles the full
@@ -123,3 +123,18 @@ optimization or on-device gameplay issue has been diagnosed already.
 Compilation/fixtures are not device gameplay verification. The first device run
 must confirm bot admission, objectives, death/respawn and map changes against the
 user's actual game assets. Unsupported engine behavior remains visible as faults.
+
+The diagnostic stress fixture is repeatable without changing controller sources:
+
+```
+IW4L_BW_PROFILE=summary IW4L_BW_DIAGNOSTICS=/tmp/bw-stress cargo run -p sim --example bw_compile -- <stock-script-root> --stress-diagnostics
+python3 tools/bw_report.py /tmp/bw-stress/<session-folder> --out /tmp/bw-stress-report.json
+```
+
+It deliberately generates 90,000 invalid calls. Validation confirmed four bounded
+segments, readable error retention after old trace records rotated away, zero
+malformed JSON lines, and the final 53-frame partial window. Separate short runs
+confirmed three-session retention and preservation of unmarked directories.
+The Detailed fixture also retained its aggregate instruction/native counters when
+its bounded native-I/O queue dropped startup detail. These are host-side
+instrumentation tests, not measurements of iPad gameplay performance.

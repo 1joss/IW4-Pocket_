@@ -204,3 +204,95 @@ fn bot_warfare_new_life_clears_previous_controls_before_new_input() {
     assert_eq!(b.forward, 127);
     assert_eq!(b.angles, [0., 90., 0.]);
 }
+
+#[test]
+fn bot_warfare_admission_connect_begin_disconnect_and_slot_reuse() {
+    use structured_data_iw4::{DataType, Definition, DefinitionSet};
+    let sources=BTreeMap::from([
+        ("maps/mp/bots/test".into(),"main() { level.begins=0; level.first=addtestclient(); level.second=addtestclient(); } one() { level.replacement=addtestclient(); }".into()),
+        ("maps/mp/gametypes/_callbacksetup".into(),"codecallback_playerconnect() { self waittill(\"begin\"); level.begins++; } codecallback_playerdisconnect() { self notify(\"disconnect\"); }".into()),
+    ]);
+    let program = Program::load(
+        &sources,
+        &["maps/mp/bots/test", "maps/mp/gametypes/_callbacksetup"],
+        &Catalog::iw4(),
+    )
+    .unwrap();
+    let definition = Definition {
+        version: 1,
+        checksum: 1,
+        size: 12,
+        root: DataType::Int,
+        enums: vec![],
+        structs: vec![],
+        indexed_arrays: vec![],
+        enum_arrays: vec![],
+    };
+    let mut level = crate::script::LevelData::default();
+    level.schemas.insert(
+        "mp/playerdata.def".into(),
+        std::sync::Arc::new(DefinitionSet {
+            definitions: vec![definition],
+        }),
+    );
+    let mut world = SimWorld::new();
+    world
+        .install_gsc_program(program, NativeRegistry::default(), level)
+        .unwrap();
+    world
+        .start_gsc("maps/mp/bots/test::main", Value::level(), vec![])
+        .unwrap();
+    step(
+        &mut world,
+        Tick(1),
+        &TickInput::default(),
+        50,
+        StepReason::AuthorityFrame,
+    );
+    step(
+        &mut world,
+        Tick(2),
+        &TickInput::default(),
+        50,
+        StepReason::AuthorityFrame,
+    );
+    assert_eq!(
+        world.bot_warfare_clients(),
+        vec![ClientId(16), ClientId(17)]
+    );
+    let account = world.persistent_data().account(ClientId(17)).unwrap();
+    {
+        let mut r = world.ecs.resource_mut::<Runtime>();
+        assert_eq!(r.object_field(0, "begins"), Value::Int(2));
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(r.players[&17].begun && r.players[&16].begun);
+    }
+    world.retire_client(ClientId(17));
+    step(
+        &mut world,
+        Tick(3),
+        &TickInput::default(),
+        50,
+        StepReason::AuthorityFrame,
+    );
+    assert_eq!(world.bot_warfare_clients(), vec![ClientId(16)]);
+    assert_eq!(world.persistent_data().account(ClientId(17)), None);
+    world
+        .start_gsc("maps/mp/bots/test::one", Value::level(), vec![])
+        .unwrap();
+    step(
+        &mut world,
+        Tick(4),
+        &TickInput::default(),
+        50,
+        StepReason::AuthorityFrame,
+    );
+    assert_eq!(
+        world.bot_warfare_clients(),
+        vec![ClientId(16), ClientId(17)]
+    );
+    assert_ne!(
+        world.persistent_data().account(ClientId(17)).unwrap(),
+        account
+    );
+}

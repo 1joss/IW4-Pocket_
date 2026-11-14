@@ -300,6 +300,8 @@ pub(crate) fn native(
     args: &[Value],
     result: &Result<Value, String>,
     receiver: &Value,
+    script_self: &Value,
+    thread: u64,
 ) {
     let mut r = w.resource_mut::<Runtime>();
     if !r.benchmark.enabled {
@@ -314,7 +316,7 @@ pub(crate) fn native(
     }
     if r.benchmark.detailed || result.is_err() {
         let tick = r.benchmark.tick;
-        let record = json!({"type":"native","tick":tick,"native":id,"function":function,"line":line,"duration_ns":ns,"receiver":value(receiver),"args":args.iter().map(value).collect::<Vec<_>>(),"result":result.as_ref().map(|v|snapshot(&r,v,2,&mut 64)).ok(),"error":result.as_ref().err()});
+        let record = json!({"type":"native","tick":tick,"native":id,"function":function,"line":line,"duration_ns":ns,"receiver":value(receiver),"script_self":value(script_self),"client":r.player_client_of(script_self),"thread":thread,"args":args.iter().map(value).collect::<Vec<_>>(),"result":result.as_ref().map(|v|snapshot(&r,v,2,&mut 64)).ok(),"error":result.as_ref().err()});
         r.benchmark.queue(record);
     }
 }
@@ -352,7 +354,28 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
             0
         };
         let flags = r.object_field(0, "flags");
+        let flag_objects = if let Value::Array(id) = &flags {
+            r.arrays
+                .get(id)
+                .map(|a| a.values().take(16).cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut objective_details = Vec::new();
+        for flag in flag_objects {
+            let origin = field(&mut r, &flag, "origin");
+            let useobj = field(&mut r, &flag, "useobj");
+            let owner = field(&mut r, &useobj, "ownerteam");
+            let label = field(&mut r, &useobj, "label");
+            objective_details.push(json!({"entity":value(&flag),"position":value(&origin),"owner_team":value(&owner),"label":value(&label)}));
+        }
         let flags = snapshot(&r, &flags, 2, &mut 128);
+        let script_players = r
+            .players
+            .iter()
+            .map(|(client, slot)| json!({"client":client,"object":slot.object}))
+            .collect::<Vec<_>>();
         let rng = r.rng;
         let objects = r.objects.len();
         let arrays = r.arrays.len();
@@ -375,6 +398,10 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
                 let mut fields = serde_json::Map::new();
                 let path = r.object_field(bot, "astar");
                 fields.insert("path".into(), snapshot(&r, &path, 1, &mut 40));
+                fields.insert(
+                    "goal_locked".into(),
+                    value(&r.object_field(object, "bot_lock_goal")),
+                );
                 for key in [
                     "script_goal",
                     "moveto",
@@ -383,6 +410,10 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
                     "second_next_wp",
                     "prio_objective",
                     "climbing",
+                    "stop_move",
+                    "isfrozen",
+                    "isreloading",
+                    "last_fire_time",
                     "target",
                 ] {
                     fields.insert(key.into(), value(&r.object_field(bot, key)));
@@ -415,13 +446,13 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
             let skill = field(&mut r, &bots, "skill");
             let skill = snapshot(&r, &skill, 2, &mut 64);
             let input=r.bw.inputs.get(&id).map(|b|json!({"buttons":b.buttons,"forward":b.forward,"right":b.right,"angles":b.angles,"weapon":b.weapon}));
-            r.benchmark.queue(json!({"type":"bot","tick":tick,"client":id,"state":data,"input":input,"skill":skill}));
+            r.benchmark.queue(json!({"type":"bot","tick":tick,"client":id,"object":object,"state":data,"input":input,"skill":skill}));
         }
         let frame = crate::frame::FrameWorld::from_world(w);
         let positions=frame.client_ids_sorted().into_iter().filter_map(|id|frame.player(id).map(|ps|json!({"client":id.0,"position":ps.origin,"velocity":ps.velocity,"angles":ps.viewangles,"weapon":ps.weapon,"health":ps.health,"team":frame.client_meta(id).map(|m|m.client_state_team),"lifecycle":frame.client_meta(id).map(|m|format!("{:?}",m.lifecycle)),"kills":frame.client_meta(id).map(|m|m.kills),"deaths":frame.client_meta(id).map(|m|m.deaths)}))).collect::<Vec<_>>();
         let mut r = w.resource_mut::<Runtime>();
         let b = &mut r.benchmark;
-        b.queue(json!({"type":"world","tick":tick,"players":positions,"settings":settings,"rng_state":rng,"waypoint_count":waypoint_count,"objectives":flags,"live_objects":objects,"live_arrays":arrays,"array_entries":entries,"waiters":waiters,"created_threads":threads,"errors":errors}));
+        b.queue(json!({"type":"world","tick":tick,"players":positions,"script_players":script_players,"settings":settings,"rng_state":rng,"waypoint_count":waypoint_count,"objectives":flags,"objective_details":objective_details,"live_objects":objects,"live_arrays":arrays,"array_entries":entries,"waiters":waiters,"created_threads":threads,"errors":errors}));
     }
     let mut r = w.resource_mut::<Runtime>();
     let b = &mut r.benchmark;

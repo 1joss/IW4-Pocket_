@@ -37,7 +37,12 @@ impl SourceResolver for Sources {
     }
 }
 fn main() {
-    let roots = std::env::args().skip(1).map(Into::into).collect();
+    let stress = std::env::args().any(|arg| arg == "--stress-diagnostics");
+    let roots = std::env::args()
+        .skip(1)
+        .filter(|arg| arg != "--stress-diagnostics")
+        .map(Into::into)
+        .collect();
     let mut modules = sim::bot_warfare::ENTRY_MODULES.to_vec();
     modules.push("maps/mp/bots/iw4pocket_probe");
     match Program::load(&Sources(roots), &modules, &Catalog::iw4()) {
@@ -91,6 +96,25 @@ fn main() {
                 50,
                 sim::StepReason::AuthorityFrame,
             );
+            if stress {
+                world
+                    .start_gsc(
+                        "maps/mp/bots/iw4pocket_probe::diagnostic_flood",
+                        sim::script::Value::level(),
+                        Vec::new(),
+                    )
+                    .unwrap();
+            }
+            for tick in 2..=if stress { 453 } else { 100 } {
+                sim::step(
+                    &mut world,
+                    sim::Tick(tick),
+                    &Default::default(),
+                    50,
+                    sim::StepReason::AuthorityFrame,
+                );
+            }
+            world.shutdown_game();
             assert_eq!(
                 CHECKS.load(Ordering::Relaxed),
                 8,

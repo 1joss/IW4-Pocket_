@@ -24,18 +24,21 @@ def report(folder):
             for row in record[kind]:
                 acc = totals.setdefault(row["id"], collections.Counter())
                 for key, value in row.items():
-                    if key != "id":
+                    if key.startswith("max_"):
+                        acc[key] = max(acc[key], value)
+                    elif key != "id":
                         acc[key] += value
     def hottest(totals, names, timing):
         return [dict(name=names[i], **dict(counts)) for i, counts in
                 sorted(totals.items(), key=lambda item: item[1][timing], reverse=True)[:20]]
+    ticks = [r["tick"] for r in ordered if isinstance(r.get("tick"), int)]
     errors = json.loads((folder / "errors.json").read_text()) if (folder / "errors.json").exists() else []
     worlds = [r for r in ordered if r["type"] == "world"]
     return dict(schema=manifest["schema"], controller=manifest["controller"],
                 source_revision=manifest["source_revision"], build=manifest["build"],
                 profile=manifest["profile"], retained_records=len(ordered), malformed_lines=malformed,
                 retained_sequence=[min(records), max(records)] if records else [],
-                retained_ticks=[ordered[0].get("tick"), ordered[-1].get("tick")] if ordered else [],
+                retained_ticks=[min(ticks), max(ticks)] if ticks else [],
                 completed_windows=len(windows),
                 window_percentiles=[{k:r[k] for k in ("tick","frames","p50_ns","p95_ns","p99_ns","max_ns","gc_ns","diagnostic_write_ns","diagnostic_report_ns","dropped_records","io_errors")} for r in windows],
                 latest_world=worlds[-1] if worlds else None,

@@ -40,6 +40,26 @@ class ImportContract(unittest.TestCase):
             self.assertEqual(result["latest_world"]["tick"],40)
             self.assertEqual(len(result["errors"]),1)
 
+    def test_analyzer_sums_totals_but_keeps_the_largest_maximum(self):
+        spec = importlib.util.spec_from_file_location("bw_report", ROOT / "tools/bw_report.py")
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            (path / "manifest.json").write_text(json.dumps(dict(schema=1, controller="bot-warfare-gsc", source_revision="test", build="26", profile="summary", functions=["function"], natives=["trace"])))
+            records=[]
+            for sequence, maximum in [(1,10),(2,20)]:
+                row=dict(sequence=sequence,type="window",tick=sequence*100,frames=100,p50_ns=1,p95_ns=2,p99_ns=3,max_ns=maximum,gc_ns=0,diagnostic_write_ns=0,diagnostic_report_ns=0,dropped_records=0,io_errors=0)
+                row["functions"]=[dict(id=0,instructions=100,segments=2,self_ns=200,max_slice_ns=maximum)]
+                row["natives"]=[dict(id=0,calls=3,ns=100,max_ns=maximum,errors=0)]
+                records.append(row)
+            (path / "trace-00.jsonl").write_text("\n".join(map(json.dumps,records))+"\n")
+            result=mod.report(path)
+            self.assertEqual(result["hot_functions"][0]["max_slice_ns"],20)
+            self.assertEqual(result["hot_functions"][0]["instructions"],200)
+            self.assertEqual(result["hot_natives"][0]["max_ns"],20)
+            self.assertEqual(result["hot_natives"][0]["calls"],6)
+            self.assertEqual(result["retained_ticks"],[100,200])
+
 
 if __name__ == "__main__":
     unittest.main()

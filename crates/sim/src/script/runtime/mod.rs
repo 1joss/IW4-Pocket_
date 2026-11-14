@@ -901,6 +901,8 @@ fn instruction(
                         &args,
                         &value,
                         &receiver,
+                        &thread.frames.last().unwrap().receiver,
+                        thread.serial,
                     );
                     let value = value?;
                     thread.stack.push(value);

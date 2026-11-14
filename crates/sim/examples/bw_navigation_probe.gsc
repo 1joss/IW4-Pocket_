@@ -21,3 +21,14 @@ main()
     path=AStarSearch(origins[0],origins[3],undefined,false);
     bw_event(path.size==0,"empty waypoint graph returns no route");
 }
+
+// Optional diagnostic stress fixture. Intentionally calls a native incorrectly
+// 90,000 times to verify fault counting, disk rotation and retained first errors.
+diagnostic_flood()
+{
+    for(frame=0;frame<450;frame++)
+    {
+        for(i=0;i<200;i++) { self botaction("bad"); }
+        wait 0.05;
+    }
+}
