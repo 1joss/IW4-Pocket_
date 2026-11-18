@@ -18,7 +18,7 @@ class Contract(unittest.TestCase):
         plist = plistlib.loads((ROOT / "ios/Info.plist").read_bytes())
         self.assertEqual(plist["CFBundleShortVersionString"], cargo.split("-", 1)[0])
         self.assertEqual(cargo, "0.4.0")
-        self.assertEqual(plist["CFBundleVersion"], "26")
+        self.assertEqual(plist["CFBundleVersion"], "27")
         # The label shown in the main menu is the release name.
         self.assertIn('const APP_LABEL: &str = "0.4.0";', text("crates/launcher/src/main.rs"))
         self.assertEqual(plist["CFBundleIdentifier"], "com.markussela.iw4l")

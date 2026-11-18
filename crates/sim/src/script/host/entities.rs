@@ -244,6 +244,9 @@ impl Runtime {
 
     pub(crate) fn set_object_field(&mut self, id: u64, name: &str, value: Value) {
         let field = self.symbol(name);
+        if ["origin", "angles", "model"].contains(&name) {
+            self.collision_dirty = true;
+        }
         if let Some(fields) = self.objects.get_mut(&id) {
             if value == Value::Undefined {
                 fields.remove(&field);
@@ -254,7 +257,7 @@ impl Runtime {
     }
 
     pub(crate) fn new_object(&mut self) -> Result<u64, String> {
-        self.benchmark.allocations+=1;
+        self.benchmark.allocations += 1;
         let id = self.next_object;
         self.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
         self.objects.insert(id, BTreeMap::new());
@@ -384,6 +387,7 @@ impl Runtime {
     }
 
     pub(crate) fn delete_entity(&mut self, id: u64) {
+        self.collision_dirty = true;
         if let Some(client) = self.player_client(id) {
             self.release_trigger_claims(client);
         }

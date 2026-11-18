@@ -1,5 +1,16 @@
-//! Bounded, versioned GSC profiling. Script time is measured separately from
-//! native time. Detailed native I/O capture is optional and its drops explicit.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PerfCounters {
+    pub settle_runs: u64,
+    pub settle_skipped: u64,
+    pub visibility_calls: u64,
+    pub sight_avoided: u64,
+    pub visibility_cached: u64,
+    pub settle_ns: u64,
+    pub tag_builds: u64,
+    pub tag_hits: u64,
+    pub accepted_shots: u64,
+    pub attack_commands: u64,
+}
 use crate::script::{Program, Runtime, Value};
 use bevy_ecs::prelude::World;
 use serde_json::{Value as Json, json};
@@ -20,6 +31,7 @@ pub(crate) struct Span {
 }
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Benchmark {
+    pub perf: PerfCounters,
     pub spans: Vec<Span>,
     pub functions: Vec<Stat>,
     pub lines: BTreeMap<(usize, usize), u64>,
@@ -130,7 +142,7 @@ impl Benchmark {
         };
         let functions=self.functions.iter().enumerate().filter(|(_,s)|s.instructions>0).map(|(i,s)|json!({"id":i,"instructions":s.instructions,"segments":s.calls,"self_ns":s.ns,"max_slice_ns":s.max_ns})).collect::<Vec<_>>();
         let natives=self.natives.iter().enumerate().filter(|(_,s)|s.calls>0).map(|(i,s)|json!({"id":i,"calls":s.calls,"ns":s.ns,"max_ns":s.max_ns,"errors":s.errors})).collect::<Vec<_>>();
-        json!({"type":"window","partial":partial,"tick":self.tick,"frames":self.frames,"scheduler_ns":self.total_ns,"p50_ns":pct(50),"p95_ns":pct(95),"p99_ns":pct(99),"max_ns":self.max_ns,"gc_ns":self.gc_ns,"resumes":self.resumes,"diagnostic_write_ns":self.write_ns,"diagnostic_report_ns":self.report_ns,"input_bridge_ns":self.bridge_ns,"dropped_records":self.dropped,"io_errors":self.io_errors,"functions":functions,"natives":natives,"source_lines":self.lines.iter().map(|((id,line),count)|json!({"function":id,"line":line,"instructions":count})).collect::<Vec<_>>(),"allocations":self.allocations})
+        json!({"type":"window","partial":partial,"tick":self.tick,"frames":self.frames,"scheduler_ns":self.total_ns,"p50_ns":pct(50),"p95_ns":pct(95),"p99_ns":pct(99),"max_ns":self.max_ns,"gc_ns":self.gc_ns,"resumes":self.resumes,"diagnostic_write_ns":self.write_ns,"diagnostic_report_ns":self.report_ns,"input_bridge_ns":self.bridge_ns,"dropped_records":self.dropped,"io_errors":self.io_errors,"functions":functions,"natives":natives,"source_lines":self.lines.iter().map(|((id,line),count)|json!({"function":id,"line":line,"instructions":count})).collect::<Vec<_>>(),"allocations":self.allocations,"performance":{"settle_runs":self.perf.settle_runs,"settle_skipped":self.perf.settle_skipped,"visibility_calls":self.perf.visibility_calls,"sight_avoided":self.perf.sight_avoided,"visibility_cached":self.perf.visibility_cached,"settle_ns":self.perf.settle_ns,"tag_builds":self.perf.tag_builds,"tag_hits":self.perf.tag_hits,"accepted_shots":self.perf.accepted_shots,"attack_commands":self.perf.attack_commands}})
     }
     pub(crate) fn finish(&mut self) {
         if self.frames > 0 {
@@ -414,6 +426,9 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
                     "isfrozen",
                     "isreloading",
                     "last_fire_time",
+                    "fire_attempts",
+                    "fire_presses",
+                    "fire_reason",
                     "target",
                 ] {
                     fields.insert(key.into(), value(&r.object_field(bot, key)));
@@ -445,7 +460,7 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
             let bots = field(&mut r, &pers, "bots");
             let skill = field(&mut r, &bots, "skill");
             let skill = snapshot(&r, &skill, 2, &mut 64);
-            let input=r.bw.inputs.get(&id).map(|b|json!({"buttons":b.buttons,"forward":b.forward,"right":b.right,"angles":b.angles,"weapon":b.weapon}));
+            let input=r.bw.inputs.get(&id).map(|b|json!({"buttons":b.buttons,"forward":b.forward,"right":b.right,"angles":b.angles,"weapon":b.weapon,"life":b.life.map(|l|l.0),"consumed_buttons":b.consumed_buttons,"consumed_attack_ticks":b.consumed_attacks,"accepted_shots":b.accepted_shots}));
             r.benchmark.queue(json!({"type":"bot","tick":tick,"client":id,"object":object,"state":data,"input":input,"skill":skill}));
         }
         let frame = crate::frame::FrameWorld::from_world(w);
@@ -480,6 +495,7 @@ pub(crate) fn frame_end(w: &mut World, p: &Program, elapsed: u64, gc: u64) {
         b.bridge_ns = 0;
         b.samples.clear();
         b.allocations = 0;
+        b.perf = PerfCounters::default();
         b.lines.clear();
         b.functions.fill(Stat::default());
         b.natives.fill(Stat::default());

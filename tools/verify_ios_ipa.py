@@ -12,6 +12,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKERS = (
+    b"Bot Warfare GSC performance 27",
     b"Bot Warfare GSC revision", b"IW4L_BW_PROFILE", b"BotWarfareDiagnostics", b"bot-warfare-gsc",
     b"IW4L_FPV_RETAIN_MIB", b"IW4L_SHADER_WORKERS", b"IW4L_MOVE_IMAGES",
     b"optional FPV next-map cache", b"cumulative traffic (not live)",

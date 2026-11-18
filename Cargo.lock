@@ -6023,6 +6023,7 @@ dependencies = [
  "playerstate_iw4",
  "serde_json",
  "sha2",
+ "smallvec",
  "structured_data_iw4",
  "trace_iw4",
  "weapon_iw4",

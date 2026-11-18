@@ -37,7 +37,7 @@ fn closing_line_due(window: &Window) -> bool {
 fn log_match_summary(
     time: Res<Time<Real>>,
     screen: Option<Res<frame::AppScreen>>,
-    roster: Option<Res<bots::BotRoster>>,
+    authority: Option<Res<net::AuthorityWorld>>,
     mut window: Local<Window>,
 ) {
     if screen.as_deref() != Some(&frame::AppScreen::InGame) {
@@ -52,7 +52,7 @@ fn log_match_summary(
     window.match_secs += dt;
     window.secs += dt;
     window.frames += 1;
-    let bots = roster.map_or(0, |roster| roster.bots.len() as u32);
+    let bots = authority.map_or(0, |world| world.0.bot_warfare_clients().len() as u32);
     window.last_bots = bots;
     if window.secs < diag::events::MATCH_SUMMARY_EVERY_SECS {
         return;
@@ -76,16 +76,27 @@ mod tests {
     #[test]
     fn a_match_shorter_than_one_window_still_gets_a_closing_line() {
         let mut window = Window::default();
-        assert!(!closing_line_due(&window), "nothing played, nothing to write");
+        assert!(
+            !closing_line_due(&window),
+            "nothing played, nothing to write"
+        );
         window.frames = 120;
         window.secs = 4.0;
-        assert!(closing_line_due(&window), "4 s of play must be summarised when it ends");
+        assert!(
+            closing_line_due(&window),
+            "4 s of play must be summarised when it ends"
+        );
     }
 
     #[test]
     fn right_after_a_periodic_line_there_is_nothing_new_to_close() {
         // The periodic path resets `frames` to 0 after writing.
-        let window = Window { match_secs: 30.0, secs: 0.0, frames: 0, last_bots: 17 };
+        let window = Window {
+            match_secs: 30.0,
+            secs: 0.0,
+            frames: 0,
+            last_bots: 17,
+        };
         assert!(!closing_line_due(&window));
     }
 }

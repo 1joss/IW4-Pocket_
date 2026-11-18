@@ -1,3 +1,5 @@
+Current performance build: see [build 27 changes and testing](BOT_WARFARE_GSC_PERFORMANCE.md). The baseline description below documents build 26.
+
 # Bot Warfare GSC baseline (build 26)
 
 Branch: `feature/bot-warfare-gsc`, based directly on standard `origin/main` commit

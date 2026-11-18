@@ -111,7 +111,20 @@ pub(crate) fn settled(world: &mut World) -> FrameWorld<'_> {
 /// Collision rows only. Networked mover state is left to `present`: posing a
 /// mover mid-tick would break its tick-to-tick velocity.
 pub(crate) fn settle_collision(world: &mut World) {
+    let tick = world
+        .get_resource::<crate::step::StepRequest>()
+        .map(|r| r.tick);
     let mut runtime = world.resource_mut::<Runtime>();
+    if runtime.collision_settled && !runtime.collision_dirty && runtime.collision_tick == tick {
+        runtime.benchmark.perf.settle_skipped += 1;
+        return;
+    }
+    let started = runtime.benchmark.enabled.then(std::time::Instant::now);
+    runtime.visibility_cache.clear();
+    runtime.collision_settled = true;
+    runtime.collision_tick = tick;
+    runtime.collision_dirty = false;
+    runtime.benchmark.perf.settle_runs += 1;
     let placed: Vec<(u64, ScriptModelId, bool, bool)> = runtime
         .entities
         .iter()
@@ -149,6 +162,9 @@ pub(crate) fn settle_collision(world: &mut World) {
             brush.angles = angles;
         }
     }
+    if let Some(t) = started {
+        world.resource_mut::<Runtime>().benchmark.perf.settle_ns += t.elapsed().as_nanos() as u64;
+    }
 }
 
 pub(crate) fn sync_presence(world: &mut World) {
@@ -157,6 +173,7 @@ pub(crate) fn sync_presence(world: &mut World) {
         return;
     }
     let tick = request.tick;
+    world.resource_mut::<Runtime>().collision_dirty = true;
     let now = crate::level_time_ms(tick);
     settle_collision(world);
     super::entity_damage::apply_script_blasts(world, tick);
@@ -165,6 +182,7 @@ pub(crate) fn sync_presence(world: &mut World) {
     super::controls::sync_script_locks(world);
     super::triggers::dispatch_triggers(world);
     present(world, now);
+    world.resource_mut::<Runtime>().collision_dirty = true;
     settle_collision(world);
     resolve_link_tags(world);
 }
@@ -519,4 +537,80 @@ impl Runtime {
             .find(|(_, e)| e.presence == Some(id) && e.kind != EntityKind::HudElem)
             .map(|(object, _)| *object)
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlayerTags {
+    tick: Option<crate::Tick>,
+    origin: [f32; 3],
+    angles: [f32; 3],
+    height: f32,
+    legs: i32,
+    torso: i32,
+    eflags: u32,
+    lean: f32,
+    life: crate::LifeSequence,
+    kit: usize,
+    points: Vec<(String, [f32; 3])>,
+}
+pub(crate) fn player_tag(world: &mut World, client: u32, tag: &str) -> Option<[f32; 3]> {
+    let tick = world
+        .get_resource::<crate::step::StepRequest>()
+        .map(|r| r.tick);
+    let (ps, life, kit) = {
+        let f = FrameWorld::from_world(world);
+        let ps = *f.player(crate::ClientId(client))?;
+        (
+            ps,
+            f.client_meta(crate::ClientId(client))?.life_sequence,
+            f.collision_kit_index(crate::ClientId(client)),
+        )
+    };
+    let valid = world
+        .resource::<Runtime>()
+        .player_tags
+        .get(&client)
+        .is_some_and(|c| {
+            c.tick == tick
+                && c.origin == ps.origin
+                && c.angles == ps.viewangles
+                && c.height == ps.view_height_current
+                && c.legs == ps.legs_anim
+                && c.torso == ps.torso_anim
+                && c.eflags == ps.e_flags
+                && c.lean == ps.leanf
+                && c.life == life
+                && c.kit == kit
+        });
+    if valid {
+        world.resource_mut::<Runtime>().benchmark.perf.tag_hits += 1;
+    }
+    if !valid {
+        world.resource_mut::<Runtime>().benchmark.perf.tag_builds += 1;
+        let points = FrameWorld::from_world(world).player_tag_points(crate::ClientId(client), &ps);
+        world.resource_mut::<Runtime>().player_tags.insert(
+            client,
+            PlayerTags {
+                tick,
+                origin: ps.origin,
+                angles: ps.viewangles,
+                height: ps.view_height_current,
+                legs: ps.legs_anim,
+                torso: ps.torso_anim,
+                eflags: ps.e_flags,
+                lean: ps.leanf,
+                life,
+                kit,
+                points,
+            },
+        );
+    }
+    world
+        .resource::<Runtime>()
+        .player_tags
+        .get(&client)?
+        .points
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(tag))
+        .map(|(_, p)| *p)
 }

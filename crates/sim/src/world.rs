@@ -1122,7 +1122,7 @@ impl SimState {
         self.content.data.pen_table_loaded
     }
 
-    fn collision_kit_index(&self, id: ClientId) -> usize {
+    pub(crate) fn collision_kit_index(&self, id: ClientId) -> usize {
         let Some(meta) = self.client_meta(id) else {
             return 0;
         };
@@ -1501,7 +1501,11 @@ impl SimState {
         // A bad origin (NaN/inf from physics or script) must not take the whole host down
         // with every bot: refuse this one link and say so.
         let Ok(bounds) = clipmap_iw4::AreaBounds::from_mins_maxs(absmin, absmax) else {
-            diag::warn!(Sim, "collision: player {} link refused, bounds not finite (origin {origin:?})", id.0);
+            diag::warn!(
+                Sim,
+                "collision: player {} link refused, bounds not finite (origin {origin:?})",
+                id.0
+            );
             return false;
         };
         if area_world
@@ -1515,7 +1519,11 @@ impl SimState {
             )
             .is_err()
         {
-            diag::warn!(Sim, "collision: player {} link rejected by the area world", id.0);
+            diag::warn!(
+                Sim,
+                "collision: player {} link rejected by the area world",
+                id.0
+            );
             return false;
         }
         true
@@ -1527,7 +1535,11 @@ impl SimState {
         match u16::try_from(id.0) {
             Ok(n) if usize::from(n) < 1024 => Some(n),
             _ => {
-                diag::warn!(Sim, "collision: client id {} does not fit the 1024-entry collision world", id.0);
+                diag::warn!(
+                    Sim,
+                    "collision: client id {} does not fit the 1024-entry collision world",
+                    id.0
+                );
                 None
             }
         }
@@ -1543,7 +1555,11 @@ impl SimState {
         match area_world.translate(entity_num, delta) {
             Ok(moved) => moved,
             Err(_) => {
-                diag::warn!(Sim, "collision: player {} translate rejected (delta {delta:?})", id.0);
+                diag::warn!(
+                    Sim,
+                    "collision: player {} translate rejected (delta {delta:?})",
+                    id.0
+                );
                 false
             }
         }
@@ -2429,6 +2445,51 @@ impl SimState {
         )
     }
 
+    /// Current authoritative hit-volume centres, with explicit stance-aware
+    /// fallbacks when a retained animated model is unavailable.
+    pub(crate) fn player_tag_points(
+        &self,
+        id: ClientId,
+        ps: &PlayerState,
+    ) -> Vec<(String, [f32; 3])> {
+        let mut points = Vec::new();
+        let kit = self.collision_kit(id);
+        if let Some(cap) = kit.body.as_ref() {
+            if let Ok((bones, _)) = self.player_hitvol_bones(id, ps) {
+                for bone in bones {
+                    if let Some(name) = cap.pose.bone_names.get(bone.bone as usize) {
+                        points.push((name.to_string(), bone.center));
+                    }
+                }
+            }
+        }
+        let height = ps.view_height_current.max(8.);
+        let yaw = ps.viewangles[1].to_radians();
+        let side = [-yaw.sin(), yaw.cos(), 0.];
+        for (tag, z, lateral) in [
+            ("tag_origin", 0., 0.),
+            ("j_head", height + 4., 0.),
+            ("j_spineupper", height * 0.72, 0.),
+            ("j_spine4", height * 0.60, 0.),
+            ("j_ankle_le", 3., 5.),
+            ("j_ankle_ri", 3., -5.),
+        ] {
+            if !points
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(tag))
+            {
+                points.push((
+                    tag.into(),
+                    [
+                        ps.origin[0] + side[0] * lateral,
+                        ps.origin[1] + side[1] * lateral,
+                        ps.origin[2] + z,
+                    ],
+                ));
+            }
+        }
+        points
+    }
     fn player_hitvol_bones(
         &self,
         id: ClientId,

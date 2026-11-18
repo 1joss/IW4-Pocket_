@@ -470,6 +470,9 @@ impl FrameWorld<'_> {
         &self,
         query: crate::bullet_collision::BulletTraceQuery,
     ) -> crate::bullet_collision::TraceOutcome {
+        if query.mask & crate::bullet_collision::CONTENTS_BODY == 0 {
+            return self.bullet_trace(query, None);
+        }
         let moved = self.player_poses_since_record(|id| player_ref(self.ecs, id).copied());
         self.bullet_trace(query, moved.as_deref())
     }

@@ -17,9 +17,14 @@ pub(crate) fn copy_state(source: &World, target: &mut World) {
     target.insert_resource(source.resource::<Runtime>().clone());
     target.insert_resource(source.resource::<host::mechanics::Mechanics>().clone());
     target.insert_resource(source.resource::<NativeRegistry>().clone());
+    target.resource_mut::<Runtime>().thread_index.clear();
     for entity in source.iter_entities() {
         if let Some(thread) = entity.get::<Thread>() {
-            target.spawn(thread.clone());
+            let id = target.spawn(thread.clone()).id();
+            target
+                .resource_mut::<Runtime>()
+                .thread_index
+                .insert(thread.serial, id);
         }
     }
 }
@@ -102,6 +107,16 @@ pub(crate) fn install_level(
     runtime.benchmark.initialize(&program);
     runtime.program = Some(program.clone());
     runtime.natives = bound;
+    runtime.native_readonly = program
+        .natives
+        .iter()
+        .map(|b| natives.geometry_readonly(b.namespace, b.name))
+        .collect();
+    runtime.native_borrow_args = program
+        .natives
+        .iter()
+        .map(|b| natives.borrow_args(b.namespace, b.name))
+        .collect();
     runtime.objects.insert(0, BTreeMap::new());
     runtime.objects.insert(1, BTreeMap::new());
     runtime.objects.insert(2, BTreeMap::new());

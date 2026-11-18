@@ -22,6 +22,7 @@ pub fn file(path: &str) -> Option<&'static [u8]> {
 pub(crate) fn builtins() -> Vec<crate::script::Builtin> {
     use crate::script::{Builtin, Namespace::*, Owner::*};
     let functions = [
+        "bw_visible",
         "printconsole",
         "filewrite",
         "fileread",

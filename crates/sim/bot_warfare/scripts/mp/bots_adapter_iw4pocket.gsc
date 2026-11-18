@@ -2,7 +2,9 @@ init()
 {
     setdvarifuninitialized( "bots_main_firstIsHost", "1" );
     setdvarifuninitialized( "bots_skill", "3" );
+    setdvarifuninitialized( "bots_perf_discovery_hz", "10" );
     printconsole( "Bot Warfare GSC revision " + bw_profile() );
+    printconsole( "Bot Warfare GSC performance 27" );
 	level.bot_builtins[ "printconsole" ] = ::do_printconsole;
 	level.bot_builtins[ "filewrite" ] = ::do_filewrite;
 	level.bot_builtins[ "fileread" ] = ::do_fileread;

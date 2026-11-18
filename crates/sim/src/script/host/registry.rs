@@ -7,10 +7,13 @@ use crate::script::{Namespace, Runtime, Value};
 pub type Native = fn(&mut World, &Value, &[Value]) -> Result<Value, String>;
 
 #[derive(Resource, Clone)]
-pub struct NativeRegistry(BTreeMap<(Namespace, String), Native>);
+pub struct NativeRegistry(
+    BTreeMap<(Namespace, String), Native>,
+    std::collections::BTreeSet<(Namespace, String)>,
+);
 impl Default for NativeRegistry {
     fn default() -> Self {
-        let mut registry = Self(BTreeMap::new());
+        let mut registry = Self(BTreeMap::new(), Default::default());
         registry.register(Namespace::Function, "isdefined", |world, _, args| {
             if args.len() != 1 {
                 return Err("isdefined expects one argument".into());
@@ -47,7 +50,7 @@ impl Default for NativeRegistry {
             let id = runtime.next_object;
             runtime.next_object = id.checked_add(1).ok_or("object identifier exhausted")?;
             runtime.objects.insert(id, BTreeMap::new());
-            runtime.benchmark.allocations+=1;
+            runtime.benchmark.allocations += 1;
             Ok(Value::Object(id))
         });
         natives::iw4::register(&mut registry);
@@ -69,13 +72,110 @@ impl Default for NativeRegistry {
         super::triggers::register(&mut registry);
         super::spectators::register(&mut registry);
         crate::script::bw_host::register(&mut registry);
+        // Only audited, built-in read-only functions. Re-registering any function
+        // clears its classification, so host overrides remain conservative.
+        let names = [
+            "isdefined",
+            "gettime",
+            "geteye",
+            "gettagorigin",
+            "getorigin",
+            "getplayerangles",
+            "getentitynumber",
+            "getguid",
+            "getping",
+            "isbot",
+            "istestclient",
+            "isalive",
+            "isplayer",
+            "getent",
+            "getentarray",
+            "getarraykeys",
+            "getcurrentweapon",
+            "getweaponslist",
+            "getstance",
+            "getvelocity",
+            "playerads",
+            "getplayerviewheight",
+            "getdvar",
+            "getdvarint",
+            "getdvarfloat",
+            "isusingremote",
+            "isflashbanged",
+            "hasperk",
+            "weaponclass",
+            "getweaponclass",
+            "weaponisfullauto",
+            "weaponclipsize",
+            "getweaponammoclip",
+            "getweaponammostock",
+            "getcurrentprimaryweapon",
+            "isreloading",
+            "getcurrentweaponclipammo",
+            "isonground",
+            "issprinting",
+            "botangles",
+            "botmovement",
+            "botaction",
+            "botstop",
+            "botmeleeparams",
+            "botremoteangles",
+            "botweapon",
+            "bw_visible",
+            "bw_fire_gate",
+            "bw_profile",
+            "bw_event",
+            "printconsole",
+            "bullettrace",
+            "bullettracepassed",
+            "sighttracepassed",
+            "physicstrace",
+            "spawnsighttrace",
+            "distance",
+            "distancesquared",
+            "length",
+            "lengthsquared",
+            "vectornormalize",
+            "vectordot",
+            "vectortoangles",
+            "anglestoforward",
+            "anglestoright",
+            "anglestoup",
+            "angleclamp180",
+            "sin",
+            "cos",
+            "sqrt",
+            "abs",
+            "int",
+            "float",
+            "randomint",
+            "randomfloat",
+            "randomintrange",
+            "randomfloatrange",
+            "issubstr",
+            "getsubstr",
+            "strtok",
+            "tolower",
+        ];
+        for key in registry.0.keys() {
+            if names.contains(&key.1.as_str()) {
+                registry.1.insert(key.clone());
+            }
+        }
         registry
     }
 }
 impl NativeRegistry {
     pub fn register(&mut self, namespace: Namespace, name: &str, native: Native) {
+        self.1.remove(&(namespace, name.to_ascii_lowercase()));
         self.0
             .insert((namespace, name.to_ascii_lowercase()), native);
+    }
+    pub(crate) fn geometry_readonly(&self, namespace: Namespace, name: &str) -> bool {
+        self.1.contains(&(namespace, name.to_owned()))
+    }
+    pub(crate) fn borrow_args(&self, namespace: Namespace, name: &str) -> bool {
+        self.geometry_readonly(namespace, name) && ["isdefined", "getarraykeys"].contains(&name)
     }
     pub(crate) fn get(&self, namespace: Namespace, name: &str) -> Option<Native> {
         self.0.get(&(namespace, name.to_owned())).copied()

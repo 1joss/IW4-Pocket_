@@ -19,7 +19,9 @@ def report(folder):
     ordered = [records[k] for k in sorted(records)]
     functions, natives = {}, {}
     windows = [r for r in ordered if r["type"] == "window"]
+    performance = collections.Counter()
     for record in windows:
+        performance.update(record.get("performance", {}))
         for kind, totals in (("functions", functions), ("natives", natives)):
             for row in record[kind]:
                 acc = totals.setdefault(row["id"], collections.Counter())
@@ -41,6 +43,8 @@ def report(folder):
                 retained_ticks=[min(ticks), max(ticks)] if ticks else [],
                 completed_windows=len(windows),
                 window_percentiles=[{k:r[k] for k in ("tick","frames","p50_ns","p95_ns","p99_ns","max_ns","gc_ns","diagnostic_write_ns","diagnostic_report_ns","dropped_records","io_errors")} for r in windows],
+                performance_totals=dict(performance),
+                window_performance=[dict(tick=r["tick"], frames=r["frames"], **r.get("performance", {})) for r in windows],
                 latest_world=worlds[-1] if worlds else None,
                 errors=errors,
                 hot_functions=hottest(functions,manifest["functions"],"self_ns"),

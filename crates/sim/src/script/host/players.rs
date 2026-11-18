@@ -1130,6 +1130,7 @@ pub(crate) fn disconnect_player(world: &mut World, client: u32) {
             .retain(|(owner, _), _| *owner != client);
         runtime.weapon_bridge.remove(&client);
         runtime.bw.inputs.remove(&client);
+        runtime.player_tags.remove(&client);
         runtime.selected_classes.remove(&client);
         if runtime.local_presentation_client == Some(ClientId(client)) {
             runtime.pending_local_dvars.clear();

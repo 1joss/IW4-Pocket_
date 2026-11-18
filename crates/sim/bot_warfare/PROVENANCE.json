@@ -499,6 +499,13 @@
   },
   "local_changes": [
     "scripts/mp/bots_adapter_iw4pocket.gsc: IW4x adapter copied with explicit local-host and skill-3 defaults and revision log",
-    "maps/mp/bots/_bot_utility.gsc: line endings normalized; BotNotifyBotEvent forwards diagnostic event to bw_event; controller and navigation logic unchanged"
-  ]
+    "maps/mp/bots/_bot_utility.gsc: line endings normalized; BotNotifyBotEvent forwards diagnostic event to bw_event; controller and navigation logic unchanged",
+    "Build 27: _bot_internal.gsc uses compact native visibility, cheap FOV rejection, 10 Hz new-target discovery with current targets at 20 Hz, persistent GSC aim worker, and firing gate counters. Navigation, objectives and difficulty logic retained.",
+    "Pocket adapter defaults bots_perf_discovery_hz=10; set to 20 for the original discovery cadence."
+  ],
+  "local_sha256": {
+    "maps/mp/bots/_bot_internal.gsc": "c55a0a15b8f06a27713117da51e9a4453eb11e68f6a74e8aec61adad08e74dbf",
+    "scripts/mp/bots_adapter_iw4pocket.gsc": "afb737b385d864b5016221803c46f65baf4482315a09913e0aab7053561c70a7"
+  },
+  "implementation": "gsc-performance-27"
 }

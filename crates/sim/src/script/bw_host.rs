@@ -26,6 +26,9 @@ pub(crate) struct BotInput {
     pub remote: [u8; 2],
     pub life: Option<crate::LifeSequence>,
     pub alive: bool,
+    pub consumed_buttons: u32,
+    pub consumed_attacks: u64,
+    pub accepted_shots: u64,
 }
 impl Default for BotInput {
     fn default() -> Self {
@@ -40,6 +43,9 @@ impl Default for BotInput {
             remote: [0; 2],
             life: None,
             alive: false,
+            consumed_buttons: 0,
+            consumed_attacks: 0,
+            accepted_shots: 0,
         }
     }
 }
@@ -158,6 +164,11 @@ fn create_bot(world: &mut World, _: &Value, _: &[Value]) -> Result<Value, String
     Ok(Value::Object(object))
 }
 pub(crate) fn register(registry: &mut NativeRegistry) {
+    registry.register(Function, "bw_visible", |w, _, a| {
+        Ok(Value::Int(
+            super::host::natives::engine::bw_visible(w, vector(a, 0)?, vector(a, 1)?).into(),
+        ))
+    });
     registry.register(Function, "closer", |_, _, a| {
         let origin = vector(a, 0)?;
         let x = vector(a, 1)?;

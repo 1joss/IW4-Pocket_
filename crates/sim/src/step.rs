@@ -547,6 +547,17 @@ fn run_players_system(ecs: &mut World) {
                     }),
                 };
             }
+            {
+                let mut runtime = world.ecs().resource_mut::<crate::script::Runtime>();
+                if let Some(bot) = runtime.bw.inputs.get_mut(&id.0) {
+                    bot.consumed_buttons = cmd.buttons;
+                    bot.consumed_attacks += u64::from(cmd.buttons & buttons::ATTACK != 0);
+                    bot.accepted_shots += shots.len() as u64;
+                    runtime.benchmark.perf.accepted_shots += shots.len() as u64;
+                    runtime.benchmark.perf.attack_commands +=
+                        u64::from(cmd.buttons & buttons::ATTACK != 0);
+                }
+            }
             for shot in shots {
                 crate::missile::fire_accepted_shot(&mut world, tick, &shot);
 

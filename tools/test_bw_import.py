@@ -16,9 +16,13 @@ class ImportContract(unittest.TestCase):
         manifest = json.loads((BW / "PROVENANCE.json").read_text())
         for name, expected in manifest["upstream_sha256"].items():
             data = (BW / name).read_bytes()
-            if name == "maps/mp/bots/_bot_utility.gsc":
+            if name in manifest.get("local_sha256",{}):
+                expected=manifest["local_sha256"][name]
+            elif name == "maps/mp/bots/_bot_utility.gsc":
                 data = data.replace(b'    bw_event( self getentitynumber(), msg, a, b, c, d, e, f, g );\n', b'').replace(b'\n', b'\r\n')
             self.assertEqual(hashlib.sha256(data).hexdigest(), expected, name)
+        for name,expected in manifest.get("local_sha256",{}).items():
+            self.assertEqual(hashlib.sha256((BW/name).read_bytes()).hexdigest(),expected,name)
         source = (ROOT / "crates/sim/src/bot_warfare.rs").read_text()
         self.assertIn(manifest["revision"], source)
         workflow = (ROOT / ".github/workflows/ios-release.yml").read_text()
@@ -51,6 +55,7 @@ class ImportContract(unittest.TestCase):
                 row=dict(sequence=sequence,type="window",tick=sequence*100,frames=100,p50_ns=1,p95_ns=2,p99_ns=3,max_ns=maximum,gc_ns=0,diagnostic_write_ns=0,diagnostic_report_ns=0,dropped_records=0,io_errors=0)
                 row["functions"]=[dict(id=0,instructions=100,segments=2,self_ns=200,max_slice_ns=maximum)]
                 row["natives"]=[dict(id=0,calls=3,ns=100,max_ns=maximum,errors=0)]
+                row["performance"] = dict(settle_runs=sequence, visibility_cached=sequence*2)
                 records.append(row)
             (path / "trace-00.jsonl").write_text("\n".join(map(json.dumps,records))+"\n")
             result=mod.report(path)
@@ -59,6 +64,8 @@ class ImportContract(unittest.TestCase):
             self.assertEqual(result["hot_natives"][0]["max_ns"],20)
             self.assertEqual(result["hot_natives"][0]["calls"],6)
             self.assertEqual(result["retained_ticks"],[100,200])
+            self.assertEqual(result["performance_totals"],dict(settle_runs=3,visibility_cached=6))
+            self.assertEqual(result["window_performance"][1]["visibility_cached"],4)
 
 
 if __name__ == "__main__":

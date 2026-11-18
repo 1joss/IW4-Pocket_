@@ -62,6 +62,7 @@ fn with_entity(
     change: impl FnOnce(&mut ScriptEntity),
 ) -> Result<Value, String> {
     let id = entity_id(world, receiver)?;
+    runtime(world).collision_dirty = true;
     change(runtime(world).entities.get_mut(&id).unwrap());
     Ok(Value::Undefined)
 }
@@ -966,6 +967,11 @@ fn register_placement(registry: &mut NativeRegistry) {
     registry.register(Method, "gettagorigin", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
         let tag = string(args, 0)?;
+        if let Some(client) = world.resource::<Runtime>().player_client(id) {
+            if let Some(at) = super::super::presence::player_tag(world, client, &tag) {
+                return Ok(Value::Vector(at));
+            }
+        }
         let origin = vector_field(world, id, "origin");
         let offset = super::super::presence::tag_offset(world, id, &tag).unwrap_or(ZERO);
         let axis = math_iw4::angles_to_axis(vector_field(world, id, "angles"));
@@ -2205,3 +2211,66 @@ fn register_refused(registry: &mut NativeRegistry) {
 
 pub const EXIT_LEVEL: &str = "engine:exitlevel";
 pub const MAP_RESTART: &str = "engine:map_restart";
+
+/// Same two predicates as BW checkTraceForBone, without a script result array.
+/// A blocked non-glass bullet ray already disproves the conjunction.
+pub(crate) fn bw_visible(world: &mut World, start: [f32; 3], end: [f32; 3]) -> bool {
+    world
+        .resource_mut::<Runtime>()
+        .benchmark
+        .perf
+        .visibility_calls += 1;
+    super::super::presence::settle_collision(world);
+    let key = [
+        start[0].to_bits(),
+        start[1].to_bits(),
+        start[2].to_bits(),
+        end[0].to_bits(),
+        end[1].to_bits(),
+        end[2].to_bits(),
+    ];
+    if let Some(value) = world
+        .resource::<Runtime>()
+        .visibility_cache
+        .get(&key)
+        .copied()
+    {
+        world
+            .resource_mut::<Runtime>()
+            .benchmark
+            .perf
+            .visibility_cached += 1;
+        return value;
+    }
+    let value = bw_visible_uncached(world, start, end);
+    let mut r = world.resource_mut::<Runtime>();
+    if r.visibility_cache.len() < 1024 {
+        r.visibility_cache.insert(key, value);
+    }
+    value
+}
+fn bw_visible_uncached(world: &mut World, start: [f32; 3], end: [f32; 3]) -> bool {
+    let outcome = entity_trace(
+        world,
+        start,
+        end,
+        MASK_SHOT & !crate::bullet_collision::CONTENTS_BODY,
+        TraceIgnore::default(),
+    );
+    let possible = match outcome {
+        TraceOutcome::Miss { .. } => true,
+        TraceOutcome::Hit {
+            fraction, collider, ..
+        } => fraction >= 1. || surface_name(collider) == "glass",
+        TraceOutcome::StartSolid { collider, .. } => {
+            collider.is_some_and(|c| surface_name(c) == "glass")
+        }
+        _ => false,
+    };
+    if !possible {
+        world.resource_mut::<Runtime>().benchmark.perf.sight_avoided += 1;
+        return false;
+    }
+    let t = super::super::presence::settled(world).trace_world(start, end, ZERO, ZERO, MASK_SHOT);
+    t.fraction >= 1. && t.startsolid == 0
+}

@@ -30,3 +30,6 @@ workspace = true
 
 [dependencies.serde_json]
 version = "1"
+
+[dependencies.smallvec]
+version = "1"

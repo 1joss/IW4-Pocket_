@@ -135,6 +135,7 @@ resetBotVars()
 	self.bot.semi_time = false;
 	self.bot.jump_time = undefined;
 	self.bot.last_fire_time = -1;
+    self.bot.fire_attempts=0;self.bot.fire_presses=0;self.bot.fire_reason="no_target";
 	
 	self.bot.is_cur_full_auto = false;
 	self.bot.cur_weap_dist_multi = 1;
@@ -655,6 +656,7 @@ spawned()
 	self thread target();
 	self thread updateBones();
 	self thread aim();
+    self thread bot_look_worker();
 	self thread check_reload();
 	self thread stance();
 	self thread onNewEnemy();
@@ -1325,9 +1327,7 @@ checkTraceForBone( myEye, bone )
 		return false;
 	}
 	
-	trace = bullettrace( myEye, boneLoc, false, undefined );
-	
-	return ( sighttracepassed( myEye, boneLoc, false, undefined ) && ( trace[ "fraction" ] >= 1.0 || trace[ "surfacetype" ] == "glass" ) );
+	return bw_visible( myEye, boneLoc );
 }
 
 /*
@@ -1343,6 +1343,8 @@ target_loop()
 	bestTime = 2147483647;
 	rememberTime = self.pers[ "bots" ][ "skill" ][ "remember_time" ];
 	initReactTime = self.pers[ "bots" ][ "skill" ][ "init_react_time" ];
+    scanNewTargets = getdvarint( "bots_perf_discovery_hz" ) >= 20 || int( theTime / 50 ) % 2 == self getentitynumber() % 2;
+    myForward = anglestoforward( myAngles );
 	hasTarget = isdefined( self.bot.target );
 	usingRemote = self isusingremote();
 	ignoreSmoke = issubstr( self getcurrentweapon(), "_thermal_" );
@@ -1459,6 +1461,8 @@ target_loop()
 				continue;
 			}
 			
+            forcedTarget = isdefined( self.bot.target_this_frame ) && self.bot.target_this_frame == player;
+            if ( !usingRemote && !isObjDef && !forcedTarget && !scanNewTargets ) { continue; }
 			canTargetPlayer = false;
 			
 			if ( usingRemote )
@@ -1468,16 +1472,15 @@ target_loop()
 			}
 			else
 			{
-				canTargetPlayer = ( ( player checkTraceForBone( myEye, "j_head" ) ||
+                toPlayer = vectornormalize( player.origin - self.origin );
+                inFov = vectordot( myForward, toPlayer ) >= myFov || ( isObjDef && obj.trace_time );
+				canTargetPlayer = ( inFov && ( player checkTraceForBone( myEye, "j_head" ) ||
 							player checkTraceForBone( myEye, "j_ankle_le" ) ||
 							player checkTraceForBone( myEye, "j_ankle_ri" ) )
 							
 						&& ( ignoreSmoke ||
-							SmokeTrace( myEye, player.origin, level.smokeradius ) ||
-							daDist < level.bots_maxknifedistance * 4 )
-							
-						&& ( getConeDot( player.origin, self.origin, myAngles ) >= myFov ||
-							( isObjDef && obj.trace_time ) ) );
+                            daDist < level.bots_maxknifedistance * 4 ||
+                            SmokeTrace( myEye, player.origin, level.smokeradius ) ) );
 			}
 			
 			if ( isdefined( self.bot.target_this_frame ) && self.bot.target_this_frame == player )
@@ -1771,6 +1774,7 @@ clear_bot_after_target()
 */
 aim_loop()
 {
+    self.bot.fire_reason="no_target";
 	aimspeed = self.pers[ "bots" ][ "skill" ][ "aim_time" ];
 	
 	if ( self isStunned() || self isArtShocked() )
@@ -1795,7 +1799,7 @@ aim_loop()
 	{
 		aimpos = self.bot.jav_loc;
 		
-		self thread bot_lookat( aimpos, aimspeed );
+		self bot_lookat( aimpos, aimspeed );
 		self thread pressADS();
 		
 		if ( curweap == "javelin_mp" && getdvarint( "bots_play_fire" ) )
@@ -1814,6 +1818,7 @@ aim_loop()
 		if ( no_trace_time <= no_trace_look_time )
 		{
 			trace_time = self.bot.target.trace_time;
+            self.bot.fire_reason="no_los";
 			last_pos = self.bot.target.last_seen_pos;
 			target = self.bot.target.entity;
 			conedot = 0;
@@ -1909,11 +1914,11 @@ aim_loop()
 				
 				if ( !usingRemote )
 				{
-					self thread bot_lookat( last_pos + ( 0, 0, self getplayerviewheight() + nadeAimOffset ), aimspeed );
+					self bot_lookat( last_pos + ( 0, 0, self getplayerviewheight() + nadeAimOffset ), aimspeed );
 				}
 				else
 				{
-					self thread bot_lookat( last_pos, aimspeed );
+					self bot_lookat( last_pos, aimspeed );
 				}
 				
 				return;
@@ -1932,15 +1937,15 @@ aim_loop()
 					
 					if ( isdefined( self.bot.knifing_target ) && self.bot.knifing_target == target )
 					{
-						self thread bot_lookat( target gettagorigin( "j_spine4" ), 0.05 );
+						self bot_lookat( target gettagorigin( "j_spine4" ), 0.05 );
 					}
 					else if ( !nadeAimOffset && conedot > 0.999995 && lengthsquared( aimoffset ) < 0.05 )
 					{
-						self thread bot_lookat( aimpos, 0.05 );
+						self bot_lookat( aimpos, 0.05 );
 					}
 					else
 					{
-						self thread bot_lookat( aimpos, aimspeed, target getvelocity(), true );
+						self bot_lookat( aimpos, aimspeed, target getvelocity(), true );
 					}
 				}
 				else
@@ -1954,11 +1959,11 @@ aim_loop()
 					
 					if ( !nadeAimOffset && conedot > 0.999995 && lengthsquared( aimoffset ) < 0.05 )
 					{
-						self thread bot_lookat( aimpos, 0.05 );
+						self bot_lookat( aimpos, 0.05 );
 					}
 					else
 					{
-						self thread bot_lookat( aimpos, aimspeed );
+						self bot_lookat( aimpos, aimspeed );
 					}
 				}
 				
@@ -1978,6 +1983,7 @@ aim_loop()
 				
 				if ( !self canFire( curweap ) || !self isInRange( dist, curweap ) )
 				{
+                    self.bot.fire_reason="weapon_or_range";
 					return;
 				}
 				
@@ -2010,8 +2016,12 @@ aim_loop()
 					return;
 				}
 				
+                self.bot.fire_reason="reaction";
 				if ( trace_time > reaction_time )
 				{
+                    self.bot.fire_reason="alignment";
+                    if ( canADS && adsAmount < 1.0 && !self inLastStand() && self getstance() != "prone" ) {self.bot.fire_reason="ads";}
+                    if ( !getdvarint("bots_play_fire") ) {self.bot.fire_reason="disabled";}
 					if ( ( !canADS || adsAmount >= 1.0 || self inLastStand() || self getstance() == "prone" ) && ( conedot > 0.99 || dist < level.bots_maxknifedistance ) && getdvarint( "bots_play_fire" ) )
 					{
 						self botFire( curweap );
@@ -2059,7 +2069,7 @@ aim_loop()
 		
 		conedot = getConeDot( aimpos, eyePos, angles );
 		
-		self thread bot_lookat( aimpos, aimspeed );
+		self bot_lookat( aimpos, aimspeed );
 		
 		if ( !self canFire( curweap ) || !self isInRange( dist, curweap ) )
 		{
@@ -2102,11 +2112,11 @@ aim_loop()
 	{
 		forwardPos = anglestoforward( level.waypoints[ self.bot.next_wp ].angles ) * 1024;
 		
-		self thread bot_lookat( eyePos + forwardPos, aimspeed );
+		self bot_lookat( eyePos + forwardPos, aimspeed );
 	}
 	else if ( isdefined( self.bot.script_aimpos ) )
 	{
-		self thread bot_lookat( self.bot.script_aimpos, aimspeed );
+		self bot_lookat( self.bot.script_aimpos, aimspeed );
 	}
 	else if ( !usingRemote )
 	{
@@ -2123,7 +2133,7 @@ aim_loop()
 		
 		if ( isdefined( lookat ) )
 		{
-			self thread bot_lookat( lookat + ( 0, 0, self getplayerviewheight() ), aimspeed );
+			self bot_lookat( lookat + ( 0, 0, self getplayerviewheight() ), aimspeed );
 		}
 	}
 }
@@ -2160,6 +2170,7 @@ aim()
 */
 botFire( curweap )
 {
+    self.bot.fire_attempts++;self.bot.fire_reason="attempt";
 	self.bot.last_fire_time = gettime();
 	
 	if ( self.bot.is_cur_full_auto )
@@ -2176,6 +2187,7 @@ botFire( curweap )
 	
 	if ( self.bot.semi_time )
 	{
+        self.bot.fire_reason="cooldown";
 		return;
 	}
 	
@@ -3082,6 +3094,7 @@ fire( what )
 */
 pressFire( time )
 {
+    self.bot.fire_presses++;self.bot.fire_reason="pressed";
 	self endon( "death" );
 	self endon( "disconnect" );
 	self notify( "bot_fire" );
@@ -3264,11 +3277,6 @@ botGetThirdPersonOffset( angles )
 bot_lookat( pos, time, vel, doAimPredict )
 {
 	self notify( "bots_aim_overlap" );
-	self endon( "bots_aim_overlap" );
-	self endon( "disconnect" );
-	self endon( "death" );
-	self endon( "spawned_player" );
-	level endon ( "game_ended" );
 	
 	if ( level.gameended || !gameflag( "prematch_done" ) || self.bot.isfrozen || !getdvarint( "bots_play_aim" ) )
 	{
@@ -3322,10 +3330,31 @@ bot_lookat( pos, time, vel, doAimPredict )
 	Y = angleclamp180( angles[ 1 ] - myAngle[ 1 ] );
 	Y = Y / steps;
 	
-	for ( i = 0; i < steps; i++ )
-	{
-		myAngle = ( angleclamp180( myAngle[ 0 ] + X ), angleclamp180( myAngle[ 1 ] + Y ), 0 );
-		self BotBuiltinBotAngles( myAngle );
-		wait 0.05;
-	}
+    self.bot.look_angles = myAngle;
+    self.bot.look_delta = ( X, Y, 0 );
+    self.bot.look_steps = steps;
+    self bot_look_step();
+}
+
+// One interpolation worker per spawned bot, replacing a new cancellable thread
+// for every aim refresh. The first step still runs immediately in GSC.
+bot_look_step()
+{
+    angles = self.bot.look_angles;
+    delta = self.bot.look_delta;
+    angles = ( angleclamp180( angles[0] + delta[0] ), angleclamp180( angles[1] + delta[1] ), 0 );
+    self.bot.look_angles = angles;
+    self.bot.look_steps--;
+    self BotBuiltinBotAngles( angles );
+}
+bot_look_worker()
+{
+    self endon( "disconnect" ); self endon( "death" ); self endon( "spawned_player" ); level endon( "game_ended" );
+    self.bot.look_steps = 0;
+    for(;;)
+    {
+        wait 0.05;
+        if ( level.gameended || self.bot.isfrozen || !getdvarint("bots_play_aim") ) { self.bot.look_steps=0; continue; }
+        if ( self.bot.look_steps > 0 ) { self bot_look_step(); }
+    }
 }
