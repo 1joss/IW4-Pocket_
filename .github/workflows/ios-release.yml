@@ -14,7 +14,7 @@ on:
         default: macos-15
         options:
           - macos-15
-          - macos-14
+          - macos-15-intel
 permissions:
   contents: write
   actions: write
